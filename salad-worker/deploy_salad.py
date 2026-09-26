@@ -11,6 +11,15 @@ import urllib.request
 BASE = "https://api.salad.com/api/public"
 USER_AGENT = "comfyui-controller/1.0"
 
+SENSITIVE_KEYS = {
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "hf_token",
+    "salad_api_key",
+    "r2_access_key_id",
+    "r2_secret_access_key",
+}
+
 
 def env(name, default=None, required=False):
     value = os.getenv(name, default)
@@ -47,6 +56,23 @@ def request(method, path, body=None, allow_404=False):
         raise RuntimeError(f"{method} {url} -> {exc.code}: {raw}") from exc
 
 
+def redact_secrets(value):
+    """Recursively redact secrets from API payloads/responses before printing."""
+    if isinstance(value, dict):
+        output = {}
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_KEYS and item:
+                output[key] = "***REDACTED***"
+            else:
+                output[key] = redact_secrets(item)
+        return output
+
+    if isinstance(value, list):
+        return [redact_secrets(item) for item in value]
+
+    return value
+
+
 def normalize_gpu_name(value):
     return " ".join(str(value).strip().lower().split())
 
@@ -60,20 +86,24 @@ def gpu_classes():
         normalize_gpu_name(item.get("name", "")): item for item in items
     }
     matches, missing = [], []
+
     for wanted_name in wanted:
         item = available_by_name.get(wanted_name)
         if item is None:
             missing.append(wanted_name)
         else:
             matches.append({"id": item["id"], "name": item["name"]})
+
     if missing:
         available = [item.get("name") for item in items]
         raise SystemExit(
             "Requested GPU classes were not found by exact name. "
             f"Missing={missing!r}\nAvailable sample={available[:50]!r}"
         )
+
     if not matches:
         raise SystemExit("No GPU classes selected.")
+
     return matches
 
 
@@ -94,7 +124,10 @@ def group_exists():
 
 
 def queue_payload():
-    return {"name": QUEUE, "display_name": "Qwen ComfyUI Jobs"}
+    return {
+        "name": QUEUE,
+        "display_name": "Qwen ComfyUI Jobs",
+    }
 
 
 def group_payload(gpus):
@@ -109,6 +142,7 @@ def group_payload(gpus):
         "AWS_ENDPOINT_URL_S3": env("R2_ENDPOINT_URL", required=True),
         "AWS_ENDPOINT_URL": env("R2_ENDPOINT_URL", required=True),
     }
+
     hf_token = env("HF_TOKEN", "")
     if hf_token:
         environment_variables["HF_TOKEN"] = hf_token
@@ -131,16 +165,11 @@ def group_payload(gpus):
         "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
         "autostart_policy": True,
-
-        # IMPORTANT:
-        # Do not set "networking" when using queue_connection.
-        # Salad's live API rejects QueueConnection + Networking together.
         "queue_connection": {
             "path": "/prompt",
             "port": 3000,
             "queue_name": QUEUE,
         },
-
         "queue_autoscaler": {
             "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
             "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
@@ -149,7 +178,6 @@ def group_payload(gpus):
             "max_upscale_per_minute": 1,
             "max_downscale_per_minute": 1,
         },
-
         "readiness_probe": {
             "http": {
                 "path": "/ready",
@@ -163,7 +191,6 @@ def group_payload(gpus):
             "success_threshold": 1,
             "failure_threshold": 20,
         },
-
         "startup_probe": {
             "http": {
                 "path": "/health",
@@ -178,15 +205,6 @@ def group_payload(gpus):
             "failure_threshold": 20,
         },
     }
-
-
-def redacted(payload):
-    copied = json.loads(json.dumps(payload))
-    values = copied.get("container", {}).get("environment_variables", {})
-    for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "HF_TOKEN"]:
-        if key in values and values[key]:
-            values[key] = "***REDACTED***"
-    return copied
 
 
 def main():
@@ -213,10 +231,10 @@ def main():
     group_config = group_payload(gpus)
 
     print("\nQueue payload:")
-    print(json.dumps(queue_config, indent=2))
+    print(json.dumps(redact_secrets(queue_config), indent=2))
 
     print("\nContainer group payload:")
-    print(json.dumps(redacted(group_config), indent=2))
+    print(json.dumps(redact_secrets(group_config), indent=2))
 
     if not args.apply:
         print(
@@ -234,7 +252,10 @@ def main():
             f"/organizations/{ORG}/projects/{PROJECT}/queues",
             queue_config,
         )
-        print("Queue created:", json.dumps(queue, indent=2))
+        print(
+            "Queue created:",
+            json.dumps(redact_secrets(queue), indent=2),
+        )
     else:
         print("\nQueue already exists; leaving it unchanged.")
 
@@ -249,7 +270,7 @@ def main():
         )
         print(
             "Container group created:",
-            json.dumps(group, indent=2),
+            json.dumps(redact_secrets(group), indent=2),
         )
     else:
         print("\nContainer group already exists; leaving it unchanged.")
