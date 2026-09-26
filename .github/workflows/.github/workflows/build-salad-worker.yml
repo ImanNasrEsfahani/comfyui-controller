@@ -1,0 +1,50 @@
+name: Build Salad GPU Worker
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - "salad-worker/**"
+      - ".github/workflows/build-salad-worker.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push FP8 Salad worker
+        uses: docker/build-push-action@v6
+        with:
+          context: ./salad-worker
+          file: ./salad-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            MODEL_PROFILE=fp8
+          tags: |
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/ImanNasrEsfahani/comfyui-controller
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
