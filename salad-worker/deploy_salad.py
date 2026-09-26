@@ -117,7 +117,7 @@ def group_payload(gpus):
                 "gpu_classes": [gpu["id"] for gpu in gpus],
             },
             "environment_variables": environment_variables,
-            "priority": env("SALAD_PRIORITY", "lowest"),
+            "priority": env("SALAD_PRIORITY", "batch"),
         },
         "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
