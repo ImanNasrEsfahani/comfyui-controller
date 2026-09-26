@@ -78,11 +78,19 @@ def gpu_classes():
 
 
 def queue_exists():
-    return request("GET", f"/organizations/{ORG}/projects/{PROJECT}/queues/{QUEUE}", allow_404=True)
+    return request(
+        "GET",
+        f"/organizations/{ORG}/projects/{PROJECT}/queues/{QUEUE}",
+        allow_404=True,
+    )
 
 
 def group_exists():
-    return request("GET", f"/organizations/{ORG}/projects/{PROJECT}/containers/{GROUP}", allow_404=True)
+    return request(
+        "GET",
+        f"/organizations/{ORG}/projects/{PROJECT}/containers/{GROUP}",
+        allow_404=True,
+    )
 
 
 def queue_payload():
@@ -123,8 +131,16 @@ def group_payload(gpus):
         "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
         "autostart_policy": True,
-        "networking": {"protocol": "http", "port": 3000, "auth": True},
-        "queue_connection": {"path": "/prompt", "port": 3000, "queue_name": QUEUE},
+
+        # IMPORTANT:
+        # Do not set "networking" when using queue_connection.
+        # Salad's live API rejects QueueConnection + Networking together.
+        "queue_connection": {
+            "path": "/prompt",
+            "port": 3000,
+            "queue_name": QUEUE,
+        },
+
         "queue_autoscaler": {
             "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
             "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
@@ -133,6 +149,7 @@ def group_payload(gpus):
             "max_upscale_per_minute": 1,
             "max_downscale_per_minute": 1,
         },
+
         "readiness_probe": {
             "http": {
                 "path": "/ready",
@@ -146,6 +163,7 @@ def group_payload(gpus):
             "success_threshold": 1,
             "failure_threshold": 20,
         },
+
         "startup_probe": {
             "http": {
                 "path": "/health",
@@ -173,7 +191,11 @@ def redacted(payload):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Actually create missing Salad resources")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually create missing Salad resources",
+    )
     args = parser.parse_args()
 
     print(f"Organization: {ORG}")
@@ -183,6 +205,7 @@ def main():
     print(f"Image: {IMAGE}")
 
     gpus = gpu_classes()
+
     print("\nMatched GPU classes:")
     print(json.dumps(gpus, indent=2))
 
@@ -196,10 +219,14 @@ def main():
     print(json.dumps(redacted(group_config), indent=2))
 
     if not args.apply:
-        print("\nDRY RUN ONLY. Re-run with --apply to create missing resources.")
+        print(
+            "\nDRY RUN ONLY. "
+            "Re-run with --apply to create missing resources."
+        )
         return
 
     queue = queue_exists()
+
     if queue is None:
         print("\nCreating queue...")
         queue = request(
@@ -212,6 +239,7 @@ def main():
         print("\nQueue already exists; leaving it unchanged.")
 
     group = group_exists()
+
     if group is None:
         print("\nCreating container group...")
         group = request(
@@ -219,10 +247,16 @@ def main():
             f"/organizations/{ORG}/projects/{PROJECT}/containers",
             group_config,
         )
-        print("Container group created:", json.dumps(group, indent=2))
+        print(
+            "Container group created:",
+            json.dumps(group, indent=2),
+        )
     else:
         print("\nContainer group already exists; leaving it unchanged.")
-        print("This script intentionally does not PATCH an existing production group.")
+        print(
+            "This script intentionally does not PATCH "
+            "an existing production group."
+        )
 
 
 if __name__ == "__main__":
