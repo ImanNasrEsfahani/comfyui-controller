@@ -104,6 +104,7 @@ def group_payload(gpus):
     hf_token = env("HF_TOKEN", "")
     if hf_token:
         environment_variables["HF_TOKEN"] = hf_token
+
     return {
         "name": GROUP,
         "display_name": "Qwen ComfyUI Scale-to-Zero",
@@ -133,7 +134,12 @@ def group_payload(gpus):
             "max_downscale_per_minute": 1,
         },
         "readiness_probe": {
-            "http": {"path": "/ready", "port": 3000},
+            "http": {
+                "path": "/ready",
+                "port": 3000,
+                "scheme": "http",
+                "headers": [],
+            },
             "initial_delay_seconds": 10,
             "period_seconds": 10,
             "timeout_seconds": 5,
@@ -141,7 +147,12 @@ def group_payload(gpus):
             "failure_threshold": 20,
         },
         "startup_probe": {
-            "http": {"path": "/health", "port": 3000},
+            "http": {
+                "path": "/health",
+                "port": 3000,
+                "scheme": "http",
+                "headers": [],
+            },
             "initial_delay_seconds": 120,
             "period_seconds": 30,
             "timeout_seconds": 5,
@@ -164,34 +175,50 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true", help="Actually create missing Salad resources")
     args = parser.parse_args()
+
     print(f"Organization: {ORG}")
     print(f"Project: {PROJECT}")
     print(f"Queue: {QUEUE}")
     print(f"Container group: {GROUP}")
     print(f"Image: {IMAGE}")
+
     gpus = gpu_classes()
     print("\nMatched GPU classes:")
     print(json.dumps(gpus, indent=2))
+
     queue_config = queue_payload()
     group_config = group_payload(gpus)
+
     print("\nQueue payload:")
     print(json.dumps(queue_config, indent=2))
+
     print("\nContainer group payload:")
     print(json.dumps(redacted(group_config), indent=2))
+
     if not args.apply:
         print("\nDRY RUN ONLY. Re-run with --apply to create missing resources.")
         return
+
     queue = queue_exists()
     if queue is None:
         print("\nCreating queue...")
-        queue = request("POST", f"/organizations/{ORG}/projects/{PROJECT}/queues", queue_config)
+        queue = request(
+            "POST",
+            f"/organizations/{ORG}/projects/{PROJECT}/queues",
+            queue_config,
+        )
         print("Queue created:", json.dumps(queue, indent=2))
     else:
         print("\nQueue already exists; leaving it unchanged.")
+
     group = group_exists()
     if group is None:
         print("\nCreating container group...")
-        group = request("POST", f"/organizations/{ORG}/projects/{PROJECT}/containers", group_config)
+        group = request(
+            "POST",
+            f"/organizations/{ORG}/projects/{PROJECT}/containers",
+            group_config,
+        )
         print("Container group created:", json.dumps(group, indent=2))
     else:
         print("\nContainer group already exists; leaving it unchanged.")
