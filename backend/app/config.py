@@ -16,12 +16,15 @@ class Settings:
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "100"))
 
     salad_api_key: str = os.getenv("SALAD_API_KEY", "").strip()
-    salad_org: str = os.getenv("SALAD_ORG", "").strip()
-    salad_project: str = os.getenv("SALAD_PROJECT", "").strip()
+    salad_org: str = os.getenv("SALAD_ORG", "imanprojects").strip()
+    salad_project: str = os.getenv("SALAD_PROJECT", "comfy").strip()
     salad_queue: str = os.getenv("SALAD_QUEUE", "qwen-comfyui").strip()
 
-    r2_endpoint_url: str = os.getenv("R2_ENDPOINT_URL", "").strip()
-    r2_bucket: str = os.getenv("R2_BUCKET", "").strip()
+    r2_endpoint_url: str = os.getenv(
+        "R2_ENDPOINT_URL",
+        "https://4ec2a271e2c8320bc046ad41a67d36f2.r2.cloudflarestorage.com",
+    ).strip()
+    r2_bucket: str = os.getenv("R2_BUCKET", "comfy").strip()
     r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
     r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
     r2_region: str = os.getenv("R2_REGION", "auto").strip()
@@ -33,7 +36,6 @@ class Settings:
 
     def validate_r2(self):
         missing = []
-
         for name, value in [
             ("R2_ENDPOINT_URL", self.r2_endpoint_url),
             ("R2_BUCKET", self.r2_bucket),
@@ -42,15 +44,11 @@ class Settings:
         ]:
             if not value:
                 missing.append(name)
-
         if missing:
-            raise RuntimeError(
-                "Missing R2 configuration: " + ", ".join(missing)
-            )
+            raise RuntimeError("Missing R2 configuration: " + ", ".join(missing))
 
     def validate_salad(self):
         missing = []
-
         for name, value in [
             ("SALAD_API_KEY", self.salad_api_key),
             ("SALAD_ORG", self.salad_org),
@@ -59,11 +57,8 @@ class Settings:
         ]:
             if not value:
                 missing.append(name)
-
         if missing:
-            raise RuntimeError(
-                "Missing Salad configuration: " + ", ".join(missing)
-            )
+            raise RuntimeError("Missing Salad configuration: " + ", ".join(missing))
 
     def validate_runtime(self):
         self.validate_r2()

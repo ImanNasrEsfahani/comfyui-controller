@@ -1,96 +1,96 @@
 #!/usr/bin/env python3
+"""Create/validate Salad Job Queue + GPU Container Group.
+Default is dry-run. Use --apply to create missing resources.
 """
-Creates/validates the Salad Job Queue + GPU Container Group.
-
-Default mode is dry-run. Use --apply to mutate Salad resources.
-No GitHub writes are performed.
-"""
-import os
-import sys
-import json
 import argparse
-import urllib.request
+import json
+import os
 import urllib.error
+import urllib.request
 
 BASE = "https://api.salad.com/api/public"
+USER_AGENT = "comfyui-controller/1.0"
+
 
 def env(name, default=None, required=False):
-    v = os.getenv(name, default)
-    if required and not v:
+    value = os.getenv(name, default)
+    if required and not value:
         raise SystemExit(f"Missing {name}")
-    return v
+    return value
+
 
 API_KEY = env("SALAD_API_KEY", required=True)
-ORG = env("SALAD_ORG", required=True)
-PROJECT = env("SALAD_PROJECT", required=True)
+ORG = env("SALAD_ORG", "imanprojects")
+PROJECT = env("SALAD_PROJECT", "comfy")
 QUEUE = env("SALAD_QUEUE", "qwen-comfyui")
 GROUP = env("SALAD_CONTAINER_GROUP", "qwen-comfyui-fp8")
-IMAGE = env("SALAD_IMAGE", required=True)
+IMAGE = env("SALAD_IMAGE", "ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8")
+
 
 def request(method, path, body=None, allow_404=False):
     url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Salad-Api-Key": API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Salad-Api-Key": API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+    })
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read()
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read()
             return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace")
-        if allow_404 and e.code == 404:
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        if allow_404 and exc.code == 404:
             return None
-        raise RuntimeError(f"{method} {url} -> {e.code}: {raw}") from e
+        raise RuntimeError(f"{method} {url} -> {exc.code}: {raw}") from exc
+
+
+def normalize_gpu_name(value):
+    return " ".join(str(value).strip().lower().split())
+
 
 def gpu_classes():
     data = request("GET", f"/organizations/{ORG}/gpu-classes")
     items = data.get("items", data if isinstance(data, list) else [])
-    wanted = [x.strip().lower() for x in env("SALAD_GPU_NAMES", "RTX 4090,RTX 5090").split(",") if x.strip()]
-    matches = []
-    for item in items:
-        name = str(item.get("name", ""))
-        if any(w in name.lower() for w in wanted):
-            matches.append({"id": item["id"], "name": name})
-    if not matches:
-        names = [x.get("name") for x in items]
+    requested = env("SALAD_GPU_NAMES", "RTX 4090 (24 GB),RTX 5090 (32 GB)")
+    wanted = [normalize_gpu_name(x) for x in requested.split(",") if x.strip()]
+    available_by_name = {
+        normalize_gpu_name(item.get("name", "")): item for item in items
+    }
+    matches, missing = [], []
+    for wanted_name in wanted:
+        item = available_by_name.get(wanted_name)
+        if item is None:
+            missing.append(wanted_name)
+        else:
+            matches.append({"id": item["id"], "name": item["name"]})
+    if missing:
+        available = [item.get("name") for item in items]
         raise SystemExit(
-            "No requested GPU classes found. Requested="
-            + repr(wanted)
-            + "\nAvailable sample="
-            + repr(names[:30])
+            "Requested GPU classes were not found by exact name. "
+            f"Missing={missing!r}\nAvailable sample={available[:50]!r}"
         )
+    if not matches:
+        raise SystemExit("No GPU classes selected.")
     return matches
 
+
 def queue_exists():
-    return request(
-        "GET",
-        f"/organizations/{ORG}/projects/{PROJECT}/queues/{QUEUE}",
-        allow_404=True,
-    )
+    return request("GET", f"/organizations/{ORG}/projects/{PROJECT}/queues/{QUEUE}", allow_404=True)
+
 
 def group_exists():
-    return request(
-        "GET",
-        f"/organizations/{ORG}/projects/{PROJECT}/containers/{GROUP}",
-        allow_404=True,
-    )
+    return request("GET", f"/organizations/{ORG}/projects/{PROJECT}/containers/{GROUP}", allow_404=True)
+
 
 def queue_payload():
-    return {
-        "name": QUEUE,
-        "display_name": "Qwen ComfyUI Jobs",
-    }
+    return {"name": QUEUE, "display_name": "Qwen ComfyUI Jobs"}
+
 
 def group_payload(gpus):
-    envs = {
+    environment_variables = {
         "MANIFEST": "/opt/qvr-salad/manifest.yaml",
         "PORT": "3000",
         "LRU_CACHE_SIZE_GB": "40",
@@ -98,15 +98,12 @@ def group_payload(gpus):
         "AWS_ACCESS_KEY_ID": env("R2_ACCESS_KEY_ID", required=True),
         "AWS_SECRET_ACCESS_KEY": env("R2_SECRET_ACCESS_KEY", required=True),
         "AWS_REGION": env("R2_REGION", "auto"),
-        # AWS SDK shared endpoint configuration; R2 is S3-compatible.
         "AWS_ENDPOINT_URL_S3": env("R2_ENDPOINT_URL", required=True),
-        # Also set the global endpoint for SDK versions that only consume the common setting.
         "AWS_ENDPOINT_URL": env("R2_ENDPOINT_URL", required=True),
     }
-    hf = env("HF_TOKEN", "")
-    if hf:
-        envs["HF_TOKEN"] = hf
-
+    hf_token = env("HF_TOKEN", "")
+    if hf_token:
+        environment_variables["HF_TOKEN"] = hf_token
     return {
         "name": GROUP,
         "display_name": "Qwen ComfyUI Scale-to-Zero",
@@ -117,24 +114,16 @@ def group_payload(gpus):
                 "memory": 16384,
                 "shm_size": 2048,
                 "storage_amount": 53687091200,
-                "gpu_classes": [g["id"] for g in gpus],
+                "gpu_classes": [gpu["id"] for gpu in gpus],
             },
-            "environment_variables": envs,
+            "environment_variables": environment_variables,
             "priority": env("SALAD_PRIORITY", "lowest"),
         },
-        "replicas": 0,
+        "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
         "autostart_policy": True,
-        "networking": {
-            "protocol": "http",
-            "port": 3000,
-            "auth": True,
-        },
-        "queue_connection": {
-            "path": "/prompt",
-            "port": 3000,
-            "queue_name": QUEUE,
-        },
+        "networking": {"protocol": "http", "port": 3000, "auth": True},
+        "queue_connection": {"path": "/prompt", "port": 3000, "queue_name": QUEUE},
         "queue_autoscaler": {
             "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
             "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
@@ -161,59 +150,53 @@ def group_payload(gpus):
         },
     }
 
+
 def redacted(payload):
-    copy = json.loads(json.dumps(payload))
-    ev = copy.get("container", {}).get("environment_variables", {})
-    for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "HF_TOKEN"]:
-        if k in ev and ev[k]:
-            ev[k] = "***REDACTED***"
-    return copy
+    copied = json.loads(json.dumps(payload))
+    values = copied.get("container", {}).get("environment_variables", {})
+    for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "HF_TOKEN"]:
+        if key in values and values[key]:
+            values[key] = "***REDACTED***"
+    return copied
+
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true", help="Actually create resources")
-    args = ap.parse_args()
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--apply", action="store_true", help="Actually create missing Salad resources")
+    args = parser.parse_args()
+    print(f"Organization: {ORG}")
+    print(f"Project: {PROJECT}")
+    print(f"Queue: {QUEUE}")
+    print(f"Container group: {GROUP}")
+    print(f"Image: {IMAGE}")
     gpus = gpu_classes()
-    print("Matched GPU classes:")
+    print("\nMatched GPU classes:")
     print(json.dumps(gpus, indent=2))
-
-    qp = queue_payload()
-    gp = group_payload(gpus)
-
+    queue_config = queue_payload()
+    group_config = group_payload(gpus)
     print("\nQueue payload:")
-    print(json.dumps(qp, indent=2))
+    print(json.dumps(queue_config, indent=2))
     print("\nContainer group payload:")
-    print(json.dumps(redacted(gp), indent=2))
-
+    print(json.dumps(redacted(group_config), indent=2))
     if not args.apply:
         print("\nDRY RUN ONLY. Re-run with --apply to create missing resources.")
         return
-
-    q = queue_exists()
-    if q is None:
+    queue = queue_exists()
+    if queue is None:
         print("\nCreating queue...")
-        q = request(
-            "POST",
-            f"/organizations/{ORG}/projects/{PROJECT}/queues",
-            qp,
-        )
-        print("Queue created:", json.dumps(q, indent=2))
+        queue = request("POST", f"/organizations/{ORG}/projects/{PROJECT}/queues", queue_config)
+        print("Queue created:", json.dumps(queue, indent=2))
     else:
         print("\nQueue already exists; leaving it unchanged.")
-
-    g = group_exists()
-    if g is None:
+    group = group_exists()
+    if group is None:
         print("\nCreating container group...")
-        g = request(
-            "POST",
-            f"/organizations/{ORG}/projects/{PROJECT}/containers",
-            gp,
-        )
-        print("Container group created:", json.dumps(g, indent=2))
+        group = request("POST", f"/organizations/{ORG}/projects/{PROJECT}/containers", group_config)
+        print("Container group created:", json.dumps(group, indent=2))
     else:
         print("\nContainer group already exists; leaving it unchanged.")
         print("This script intentionally does not PATCH an existing production group.")
+
 
 if __name__ == "__main__":
     main()

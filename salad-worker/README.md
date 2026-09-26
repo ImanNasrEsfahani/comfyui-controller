@@ -1,97 +1,51 @@
 # Salad GPU Worker
 
-This directory is the ephemeral compute plane.
+This directory is the ephemeral GPU compute plane.
 
-## Why ReActor is baked but Qwen weights are not
+## Image
 
-The current upstream recovery repo requires ReActor's official `install.py`, a pinned commit, and CUDA-sensitive ONNX Runtime behavior.
+`ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8`
 
-The Salad manifest mechanism is ideal for model weights, but the ReActor hardening is safer at Docker build time.
+## GPU classes
 
-Therefore:
+Exact desktop classes only:
 
-```text
-Docker image:
-  ComfyUI API
-  ReActor code/dependencies
-  Salad Job Queue Worker
-  QVR workflow reference files
+- RTX 4090 (24 GB)
+- RTX 5090 (32 GB)
 
-Runtime manifest:
-  Qwen base
-  text encoder
-  VAE
-  Lightning LoRA
-  InsightFace swap model
-  optional LoRAs
-```
+Exact matching prevents accidental selection of Laptop variants.
 
-## Build FP8
+## Deploy
+
+From repository root:
 
 ```bash
-docker build \
-  --build-arg MODEL_PROFILE=fp8 \
-  -t ghcr.io/YOU/qwen-comfyui-salad:fp8 .
+bash scripts/salad-deploy.sh
 ```
 
-## Build INT8
+After reviewing dry-run output:
 
 ```bash
-docker build \
-  --build-arg MODEL_PROFILE=int8 \
-  -t ghcr.io/YOU/qwen-comfyui-salad:int8 .
+bash scripts/salad-deploy.sh --apply
 ```
 
-## R2 environment
+The wrapper reads the root `.env`; temporary `export` commands are not needed.
 
-The worker needs:
+## Secrets
 
-```text
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
-AWS_REGION=auto
-AWS_ENDPOINT_URL_S3=https://<account-id>.r2.cloudflarestorage.com
-```
+Keep only in `.env`, never Git:
 
-The deployment script also sets the global `AWS_ENDPOINT_URL` as a compatibility fallback.
+- SALAD_API_KEY
+- R2_ACCESS_KEY_ID
+- R2_SECRET_ACCESS_KEY
+- HF_TOKEN (if used)
 
-## Job Queue
+## Scale-to-zero defaults
 
-`queue_connection.path` is `/prompt` and port is `3000`.
+- initial replicas: 0
+- min replicas: 0
+- max replicas: 1
+- desired queue length: 1
+- polling period: 30 seconds
 
-This means the Salad Job Queue Worker takes the queue job's `input` object and sends it to:
-
-```text
-http://127.0.0.1:3000/prompt
-```
-
-The backend deliberately creates a payload that is already valid for this endpoint.
-
-## Cold start
-
-All essential files are in `before_start`.
-
-Optional LoRAs are in `after_start`.
-
-This avoids a worker becoming Ready before its required Qwen/ReActor assets exist, while not making every optional LoRA block readiness.
-
-
-## Core vs full profile
-
-The default `fp8` and `int8` profiles download only assets required by the current recovery repository.
-
-Optional portrait/NSFW LoRAs are intentionally **not** downloaded on every scale-from-zero cold start.
-
-If you explicitly want the whole optional set preloaded:
-
-```bash
-docker build --build-arg MODEL_PROFILE=fp8-full ...
-```
-
-or:
-
-```bash
-docker build --build-arg MODEL_PROFILE=int8-full ...
-```
-
-For the cost-sensitive always-on-controller architecture, start with the core profile.
+`deploy_salad.py` also sends an explicit User-Agent for compatibility with Salad's Cloudflare edge.

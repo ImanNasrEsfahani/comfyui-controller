@@ -2,13 +2,18 @@ import httpx
 from .config import settings
 
 BASE = "https://api.salad.com/api/public"
+USER_AGENT = "comfyui-controller/1.0"
+
 
 def headers():
     settings.validate_salad()
     return {
         "Salad-Api-Key": settings.salad_api_key,
         "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
     }
+
 
 def queue_base():
     return (
@@ -17,17 +22,19 @@ def queue_base():
         f"/queues/{settings.salad_queue}"
     )
 
+
 def submit_job(input_payload: dict, metadata: dict | None = None):
     body = {"input": input_payload}
     if metadata:
         body["metadata"] = metadata
-    with httpx.Client(timeout=30.0) as c:
-        r = c.post(f"{queue_base()}/jobs", headers=headers(), json=body)
-        r.raise_for_status()
-        return r.json()
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(f"{queue_base()}/jobs", headers=headers(), json=body)
+        response.raise_for_status()
+        return response.json()
+
 
 def get_job(job_id: str):
-    with httpx.Client(timeout=30.0) as c:
-        r = c.get(f"{queue_base()}/jobs/{job_id}", headers=headers())
-        r.raise_for_status()
-        return r.json()
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(f"{queue_base()}/jobs/{job_id}", headers=headers())
+        response.raise_for_status()
+        return response.json()
