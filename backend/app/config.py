@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 import os
 
+
 def required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -23,17 +25,16 @@ class Settings:
     r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
     r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
     r2_region: str = os.getenv("R2_REGION", "auto").strip()
-    r2_presign_ttl_seconds: int = int(os.getenv("R2_PRESIGN_TTL_SECONDS", "21600"))
+    r2_presign_ttl_seconds: int = int(
+        os.getenv("R2_PRESIGN_TTL_SECONDS", "21600")
+    )
 
     internal_token: str = os.getenv("APP_INTERNAL_TOKEN", "").strip()
 
-    def validate_runtime(self):
+    def validate_r2(self):
         missing = []
+
         for name, value in [
-            ("SALAD_API_KEY", self.salad_api_key),
-            ("SALAD_ORG", self.salad_org),
-            ("SALAD_PROJECT", self.salad_project),
-            ("SALAD_QUEUE", self.salad_queue),
             ("R2_ENDPOINT_URL", self.r2_endpoint_url),
             ("R2_BUCKET", self.r2_bucket),
             ("R2_ACCESS_KEY_ID", self.r2_access_key_id),
@@ -41,7 +42,32 @@ class Settings:
         ]:
             if not value:
                 missing.append(name)
+
         if missing:
-            raise RuntimeError("Missing runtime configuration: " + ", ".join(missing))
+            raise RuntimeError(
+                "Missing R2 configuration: " + ", ".join(missing)
+            )
+
+    def validate_salad(self):
+        missing = []
+
+        for name, value in [
+            ("SALAD_API_KEY", self.salad_api_key),
+            ("SALAD_ORG", self.salad_org),
+            ("SALAD_PROJECT", self.salad_project),
+            ("SALAD_QUEUE", self.salad_queue),
+        ]:
+            if not value:
+                missing.append(name)
+
+        if missing:
+            raise RuntimeError(
+                "Missing Salad configuration: " + ", ".join(missing)
+            )
+
+    def validate_runtime(self):
+        self.validate_r2()
+        self.validate_salad()
+
 
 settings = Settings()

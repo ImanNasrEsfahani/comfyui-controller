@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 from .config import settings
 
 def client():
-    settings.validate_runtime()
+    settings.validate_r2()
     return boto3.client(
         "s3",
         endpoint_url=settings.r2_endpoint_url,

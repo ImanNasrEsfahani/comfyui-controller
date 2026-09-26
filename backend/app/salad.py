@@ -4,7 +4,7 @@ from .config import settings
 BASE = "https://api.salad.com/api/public"
 
 def headers():
-    settings.validate_runtime()
+    settings.validate_salad()
     return {
         "Salad-Api-Key": settings.salad_api_key,
         "Content-Type": "application/json",
