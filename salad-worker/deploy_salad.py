@@ -2,11 +2,12 @@
 import argparse
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
 BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.2"
+USER_AGENT = "comfyui-controller/1.3"
 PRIORITIES = ("high", "medium", "low", "batch")
 
 SENSITIVE_KEYS = {
@@ -35,6 +36,9 @@ IMAGE = env(
     "SALAD_IMAGE",
     "ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8",
 )
+
+SETTLE_TIMEOUT = int(env("SALAD_CONFIG_SETTLE_TIMEOUT", "300"))
+SETTLE_POLL_SECONDS = int(env("SALAD_CONFIG_SETTLE_POLL_SECONDS", "5"))
 
 
 def request(
@@ -66,8 +70,10 @@ def request(
 
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
+
         if allow_404 and exc.code == 404:
             return None
+
         raise RuntimeError(
             f"{method} {url} -> {exc.code}: {raw}"
         ) from exc
@@ -287,11 +293,7 @@ def group_payload(gpus, priority):
             "port": 3000,
             "queue_name": queue_name(priority),
         },
-
-        # Kept in create payload for compatibility, but the live Salad API
-        # has been observed not to persist it reliably during creation.
         "queue_autoscaler": autoscaler_payload(),
-
         "readiness_probe": {
             "http": {
                 "path": "/ready",
@@ -321,24 +323,96 @@ def group_payload(gpus, priority):
     }
 
 
+def wait_for_group_settle(priority, phase):
+    """
+    Salad rejects PATCH while a previous create/update is still pending.
+    Wait until the group reports pending_change == False.
+    """
+    deadline = time.monotonic() + SETTLE_TIMEOUT
+    attempt = 0
+
+    while True:
+        attempt += 1
+        group = group_exists(priority)
+
+        if group is None:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"{group_name(priority)} did not become readable "
+                    f"within {SETTLE_TIMEOUT}s during {phase}."
+                )
+
+            print(
+                f"Waiting for {group_name(priority)} "
+                f"to become readable..."
+            )
+            time.sleep(SETTLE_POLL_SECONDS)
+            continue
+
+        pending = bool(group.get("pending_change", False))
+        state = group.get("current_state") or {}
+        status = state.get("status")
+
+        print(
+            f"Settle {priority} [{phase}] #{attempt}: "
+            f"pending_change={pending}, "
+            f"status={status!r}, "
+            f"version={group.get('version')}"
+        )
+
+        if not pending:
+            return group
+
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"{group_name(priority)} still has pending_change=true "
+                f"after {SETTLE_TIMEOUT}s during {phase}."
+            )
+
+        time.sleep(SETTLE_POLL_SECONDS)
+
+
 def sync_autoscaler(priority):
     desired = autoscaler_payload()
+    deadline = time.monotonic() + SETTLE_TIMEOUT
+    attempt = 0
 
-    result = request(
-        "PATCH",
-        group_path(priority),
-        {"queue_autoscaler": desired},
-        content_type="application/merge-patch+json",
-    )
+    while True:
+        attempt += 1
 
-    returned = result.get("queue_autoscaler")
+        try:
+            result = request(
+                "PATCH",
+                group_path(priority),
+                {"queue_autoscaler": desired},
+                content_type="application/merge-patch+json",
+            )
 
-    print(
-        f"Autoscaler PATCH {priority}: "
-        f"{'OK' if returned else 'response did not include autoscaler'}"
-    )
+            returned = result.get("queue_autoscaler")
 
-    return result
+            print(
+                f"Autoscaler PATCH {priority}: "
+                f"{'OK' if returned else 'accepted'}"
+            )
+
+            return result
+
+        except RuntimeError as exc:
+            message = str(exc)
+
+            if (
+                "pending_update_in_progress" not in message
+                or time.monotonic() >= deadline
+            ):
+                raise
+
+            print(
+                f"Autoscaler PATCH {priority}: "
+                f"previous update still pending; retrying "
+                f"in {SETTLE_POLL_SECONDS}s..."
+            )
+
+            time.sleep(SETTLE_POLL_SECONDS)
 
 
 def verify_group(priority):
@@ -417,7 +491,8 @@ def create_or_check(gpus, priority, apply):
 
         print(
             "Apply behavior: create missing resources, "
-            "then PATCH queue_autoscaler and verify."
+            "wait for Salad to settle, PATCH queue_autoscaler, "
+            "wait again, then verify."
         )
         return
 
@@ -449,9 +524,15 @@ def create_or_check(gpus, priority, apply):
     else:
         print("Container group already exists.")
 
-    # Important: the live API has been observed to omit/persist no
-    # queue_autoscaler on CREATE. Explicit PATCH makes deployment idempotent.
+    # A newly created/updated Salad group may temporarily reject PATCH with
+    # pending_update_in_progress. Wait until that operation has settled.
+    wait_for_group_settle(priority, "before autoscaler PATCH")
+
     sync_autoscaler(priority)
+
+    # The PATCH itself can create another pending configuration change.
+    wait_for_group_settle(priority, "after autoscaler PATCH")
+
     verify_group(priority)
 
 
