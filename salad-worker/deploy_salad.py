@@ -193,7 +193,7 @@ def group_exists(priority):
 
 def queue_payload(priority):
     label = (
-        "Batch / Lowest"
+        "Batch Lowest"
         if priority == "batch"
         else priority.title()
     )
@@ -260,7 +260,7 @@ def environment_payload():
 
 def group_payload(gpus, priority):
     label = (
-        "Batch / Lowest"
+        "Batch Lowest"
         if priority == "batch"
         else priority.title()
     )
@@ -324,10 +324,6 @@ def group_payload(gpus, priority):
 
 
 def wait_for_group_settle(priority, phase):
-    """
-    Salad rejects PATCH while a previous create/update is still pending.
-    Wait until the group reports pending_change == False.
-    """
     deadline = time.monotonic() + SETTLE_TIMEOUT
     attempt = 0
 
@@ -375,11 +371,8 @@ def wait_for_group_settle(priority, phase):
 def sync_autoscaler(priority):
     desired = autoscaler_payload()
     deadline = time.monotonic() + SETTLE_TIMEOUT
-    attempt = 0
 
     while True:
-        attempt += 1
-
         try:
             result = request(
                 "PATCH",
@@ -524,13 +517,10 @@ def create_or_check(gpus, priority, apply):
     else:
         print("Container group already exists.")
 
-    # A newly created/updated Salad group may temporarily reject PATCH with
-    # pending_update_in_progress. Wait until that operation has settled.
     wait_for_group_settle(priority, "before autoscaler PATCH")
 
     sync_autoscaler(priority)
 
-    # The PATCH itself can create another pending configuration change.
     wait_for_group_settle(priority, "after autoscaler PATCH")
 
     verify_group(priority)
