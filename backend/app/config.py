@@ -1,12 +1,7 @@
 from dataclasses import dataclass
 import os
 
-
-def required(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+VALID_SALAD_PRIORITIES = ("high", "medium", "low", "batch")
 
 
 @dataclass(frozen=True)
@@ -18,7 +13,9 @@ class Settings:
     salad_api_key: str = os.getenv("SALAD_API_KEY", "").strip()
     salad_org: str = os.getenv("SALAD_ORG", "imanprojects").strip()
     salad_project: str = os.getenv("SALAD_PROJECT", "comfy").strip()
-    salad_queue: str = os.getenv("SALAD_QUEUE", "qwen-comfyui").strip()
+    salad_queue_prefix: str = os.getenv("SALAD_QUEUE_PREFIX", "qwen-comfyui").strip()
+    salad_default_priority: str = os.getenv("SALAD_DEFAULT_PRIORITY", "medium").strip().lower()
+    salad_legacy_queue: str = os.getenv("SALAD_LEGACY_QUEUE", "qwen-comfyui").strip()
 
     r2_endpoint_url: str = os.getenv(
         "R2_ENDPOINT_URL",
@@ -28,9 +25,7 @@ class Settings:
     r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
     r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
     r2_region: str = os.getenv("R2_REGION", "auto").strip()
-    r2_presign_ttl_seconds: int = int(
-        os.getenv("R2_PRESIGN_TTL_SECONDS", "21600")
-    )
+    r2_presign_ttl_seconds: int = int(os.getenv("R2_PRESIGN_TTL_SECONDS", "21600"))
 
     internal_token: str = os.getenv("APP_INTERNAL_TOKEN", "").strip()
 
@@ -53,12 +48,23 @@ class Settings:
             ("SALAD_API_KEY", self.salad_api_key),
             ("SALAD_ORG", self.salad_org),
             ("SALAD_PROJECT", self.salad_project),
-            ("SALAD_QUEUE", self.salad_queue),
+            ("SALAD_QUEUE_PREFIX", self.salad_queue_prefix),
         ]:
             if not value:
                 missing.append(name)
         if missing:
             raise RuntimeError("Missing Salad configuration: " + ", ".join(missing))
+        if self.salad_default_priority not in VALID_SALAD_PRIORITIES:
+            raise RuntimeError(
+                "SALAD_DEFAULT_PRIORITY must be one of: "
+                + ", ".join(VALID_SALAD_PRIORITIES)
+            )
+
+    def salad_queue_name(self, priority: str) -> str:
+        value = (priority or self.salad_default_priority).strip().lower()
+        if value not in VALID_SALAD_PRIORITIES:
+            raise ValueError("priority must be one of: " + ", ".join(VALID_SALAD_PRIORITIES))
+        return f"{self.salad_queue_prefix}-{value}"
 
     def validate_runtime(self):
         self.validate_r2()

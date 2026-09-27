@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""Create/validate Salad Job Queue + GPU Container Group.
-Default is dry-run. Use --apply to create missing resources.
-"""
 import argparse
 import json
 import os
@@ -9,7 +6,8 @@ import urllib.error
 import urllib.request
 
 BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.0"
+USER_AGENT = "comfyui-controller/1.1"
+PRIORITIES = ("high", "medium", "low", "batch")
 
 SENSITIVE_KEYS = {
     "aws_access_key_id",
@@ -31,20 +29,27 @@ def env(name, default=None, required=False):
 API_KEY = env("SALAD_API_KEY", required=True)
 ORG = env("SALAD_ORG", "imanprojects")
 PROJECT = env("SALAD_PROJECT", "comfy")
-QUEUE = env("SALAD_QUEUE", "qwen-comfyui")
-GROUP = env("SALAD_CONTAINER_GROUP", "qwen-comfyui-fp8")
+QUEUE_PREFIX = env("SALAD_QUEUE_PREFIX", "qwen-comfyui")
+GROUP_PREFIX = env("SALAD_CONTAINER_GROUP_PREFIX", "qwen-comfyui-fp8")
 IMAGE = env("SALAD_IMAGE", "ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8")
 
 
 def request(method, path, body=None, allow_404=False):
     url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Salad-Api-Key": API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": USER_AGENT,
-    })
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Salad-Api-Key": API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             raw = response.read()
@@ -57,7 +62,6 @@ def request(method, path, body=None, allow_404=False):
 
 
 def redact_secrets(value):
-    """Recursively redact secrets from API payloads/responses before printing."""
     if isinstance(value, dict):
         output = {}
         for key, item in value.items():
@@ -66,10 +70,8 @@ def redact_secrets(value):
             else:
                 output[key] = redact_secrets(item)
         return output
-
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
-
     return value
 
 
@@ -80,12 +82,23 @@ def normalize_gpu_name(value):
 def gpu_classes():
     data = request("GET", f"/organizations/{ORG}/gpu-classes")
     items = data.get("items", data if isinstance(data, list) else [])
-    requested = env("SALAD_GPU_NAMES", "RTX 4090 (24 GB),RTX 5090 (32 GB)")
-    wanted = [normalize_gpu_name(x) for x in requested.split(",") if x.strip()]
+
+    requested = env(
+        "SALAD_GPU_NAMES",
+        "RTX 4090 (24 GB),RTX 5090 (32 GB)",
+    )
+    wanted = [
+        normalize_gpu_name(item)
+        for item in requested.split(",")
+        if item.strip()
+    ]
     available_by_name = {
-        normalize_gpu_name(item.get("name", "")): item for item in items
+        normalize_gpu_name(item.get("name", "")): item
+        for item in items
     }
-    matches, missing = [], []
+
+    matches = []
+    missing = []
 
     for wanted_name in wanted:
         item = available_by_name.get(wanted_name)
@@ -95,43 +108,57 @@ def gpu_classes():
             matches.append({"id": item["id"], "name": item["name"]})
 
     if missing:
-        available = [item.get("name") for item in items]
-        raise SystemExit(
-            "Requested GPU classes were not found by exact name. "
-            f"Missing={missing!r}\nAvailable sample={available[:50]!r}"
-        )
-
+        raise SystemExit(f"Requested GPU classes were not found: {missing!r}")
     if not matches:
         raise SystemExit("No GPU classes selected.")
-
     return matches
 
 
-def queue_exists():
+def queue_name(priority):
+    return f"{QUEUE_PREFIX}-{priority}"
+
+
+def group_name(priority):
+    return f"{GROUP_PREFIX}-{priority}"
+
+
+def queue_exists(priority):
     return request(
         "GET",
-        f"/organizations/{ORG}/projects/{PROJECT}/queues/{QUEUE}",
+        f"/organizations/{ORG}/projects/{PROJECT}/queues/{queue_name(priority)}",
         allow_404=True,
     )
 
 
-def group_exists():
+def group_exists(priority):
     return request(
         "GET",
-        f"/organizations/{ORG}/projects/{PROJECT}/containers/{GROUP}",
+        f"/organizations/{ORG}/projects/{PROJECT}/containers/{group_name(priority)}",
         allow_404=True,
     )
 
 
-def queue_payload():
+def queue_payload(priority):
+    label = "Batch / Lowest" if priority == "batch" else priority.title()
     return {
-        "name": QUEUE,
-        "display_name": "Qwen ComfyUI Jobs",
+        "name": queue_name(priority),
+        "display_name": f"Qwen ComfyUI {label} Jobs",
     }
 
 
-def group_payload(gpus):
-    environment_variables = {
+def autoscaler_payload():
+    return {
+        "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
+        "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
+        "desired_queue_length": int(env("SALAD_DESIRED_QUEUE_LENGTH", "1")),
+        "polling_period": int(env("SALAD_POLLING_PERIOD", "30")),
+        "max_upscale_per_minute": 1,
+        "max_downscale_per_minute": 1,
+    }
+
+
+def environment_payload():
+    values = {
         "MANIFEST": "/opt/qvr-salad/manifest.yaml",
         "PORT": "3000",
         "LRU_CACHE_SIZE_GB": "40",
@@ -145,11 +172,16 @@ def group_payload(gpus):
 
     hf_token = env("HF_TOKEN", "")
     if hf_token:
-        environment_variables["HF_TOKEN"] = hf_token
+        values["HF_TOKEN"] = hf_token
+    return values
+
+
+def group_payload(gpus, priority):
+    label = "Batch / Lowest" if priority == "batch" else priority.title()
 
     return {
-        "name": GROUP,
-        "display_name": "Qwen ComfyUI Scale-to-Zero",
+        "name": group_name(priority),
+        "display_name": f"Qwen ComfyUI {label}",
         "container": {
             "image": IMAGE,
             "resources": {
@@ -159,8 +191,8 @@ def group_payload(gpus):
                 "storage_amount": 53687091200,
                 "gpu_classes": [gpu["id"] for gpu in gpus],
             },
-            "environment_variables": environment_variables,
-            "priority": env("SALAD_PRIORITY", "batch"),
+            "environment_variables": environment_payload(),
+            "priority": priority,
         },
         "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
@@ -168,16 +200,9 @@ def group_payload(gpus):
         "queue_connection": {
             "path": "/prompt",
             "port": 3000,
-            "queue_name": QUEUE,
+            "queue_name": queue_name(priority),
         },
-        "queue_autoscaler": {
-            "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
-            "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
-            "desired_queue_length": int(env("SALAD_DESIRED_QUEUE_LENGTH", "1")),
-            "polling_period": int(env("SALAD_POLLING_PERIOD", "30")),
-            "max_upscale_per_minute": 1,
-            "max_downscale_per_minute": 1,
-        },
+        "queue_autoscaler": autoscaler_payload(),
         "readiness_probe": {
             "http": {
                 "path": "/ready",
@@ -207,77 +232,97 @@ def group_payload(gpus):
     }
 
 
+def verify_group(priority):
+    group = group_exists(priority)
+    if group is None:
+        raise RuntimeError(f"{group_name(priority)} not found after deployment.")
+
+    actual_priority = group.get("priority")
+    connection = group.get("queue_connection")
+    autoscaler = group.get("queue_autoscaler")
+
+    print(
+        f"Verify {priority}: "
+        f"priority={actual_priority!r}, "
+        f"queue_connection={'YES' if connection else 'NO'}, "
+        f"queue_autoscaler={'YES' if autoscaler else 'NO'}"
+    )
+
+    if actual_priority != priority:
+        raise RuntimeError(f"{group_name(priority)} priority mismatch: {actual_priority!r}")
+    if not connection:
+        raise RuntimeError(f"{group_name(priority)} has no queue_connection.")
+    if not autoscaler:
+        raise RuntimeError(
+            f"{group_name(priority)} has no queue_autoscaler. "
+            "Do not submit jobs until autoscaling is enabled."
+        )
+
+
+def create_or_check(gpus, priority, apply):
+    qp = queue_payload(priority)
+    gp = group_payload(gpus, priority)
+
+    print(f"\n=== {priority.upper()} ===")
+    print("Queue:", queue_name(priority))
+    print("Container group:", group_name(priority))
+
+    if not apply:
+        print("Queue payload:")
+        print(json.dumps(redact_secrets(qp), indent=2))
+        print("Container group payload:")
+        print(json.dumps(redact_secrets(gp), indent=2))
+        return
+
+    if queue_exists(priority) is None:
+        print("Creating queue...")
+        request(
+            "POST",
+            f"/organizations/{ORG}/projects/{PROJECT}/queues",
+            qp,
+        )
+    else:
+        print("Queue already exists.")
+
+    if group_exists(priority) is None:
+        print("Creating container group...")
+        request(
+            "POST",
+            f"/organizations/{ORG}/projects/{PROJECT}/containers",
+            gp,
+        )
+    else:
+        print("Container group already exists.")
+
+    verify_group(priority)
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--apply", action="store_true", help="Create missing resources")
     parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Actually create missing Salad resources",
+        "--priority",
+        choices=PRIORITIES,
+        help="Deploy/check only one priority. Default: all four.",
     )
     args = parser.parse_args()
 
+    selected = (args.priority,) if args.priority else PRIORITIES
+
     print(f"Organization: {ORG}")
     print(f"Project: {PROJECT}")
-    print(f"Queue: {QUEUE}")
-    print(f"Container group: {GROUP}")
     print(f"Image: {IMAGE}")
+    print("Priorities:", ", ".join(selected))
 
     gpus = gpu_classes()
-
     print("\nMatched GPU classes:")
     print(json.dumps(gpus, indent=2))
 
-    queue_config = queue_payload()
-    group_config = group_payload(gpus)
-
-    print("\nQueue payload:")
-    print(json.dumps(redact_secrets(queue_config), indent=2))
-
-    print("\nContainer group payload:")
-    print(json.dumps(redact_secrets(group_config), indent=2))
+    for priority in selected:
+        create_or_check(gpus, priority, args.apply)
 
     if not args.apply:
-        print(
-            "\nDRY RUN ONLY. "
-            "Re-run with --apply to create missing resources."
-        )
-        return
-
-    queue = queue_exists()
-
-    if queue is None:
-        print("\nCreating queue...")
-        queue = request(
-            "POST",
-            f"/organizations/{ORG}/projects/{PROJECT}/queues",
-            queue_config,
-        )
-        print(
-            "Queue created:",
-            json.dumps(redact_secrets(queue), indent=2),
-        )
-    else:
-        print("\nQueue already exists; leaving it unchanged.")
-
-    group = group_exists()
-
-    if group is None:
-        print("\nCreating container group...")
-        group = request(
-            "POST",
-            f"/organizations/{ORG}/projects/{PROJECT}/containers",
-            group_config,
-        )
-        print(
-            "Container group created:",
-            json.dumps(redact_secrets(group), indent=2),
-        )
-    else:
-        print("\nContainer group already exists; leaving it unchanged.")
-        print(
-            "This script intentionally does not PATCH "
-            "an existing production group."
-        )
+        print("\nDRY RUN ONLY. Re-run with --apply.")
 
 
 if __name__ == "__main__":

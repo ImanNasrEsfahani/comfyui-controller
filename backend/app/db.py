@@ -4,8 +4,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from .config import settings
 
+
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
+
 
 def connect():
     p = Path(settings.db_path)
@@ -13,6 +15,7 @@ def connect():
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     with connect() as c:
@@ -40,8 +43,21 @@ def init_db():
         );
         """)
 
-def rowdict(row):
-    return dict(row) if row else None
+        cols = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
+
+        if "priority" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'")
+
+        if "salad_queue" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN salad_queue TEXT")
+
+        c.execute(
+            """UPDATE jobs
+               SET salad_queue=?
+               WHERE salad_queue IS NULL OR salad_queue=''""",
+            (settings.salad_legacy_queue,),
+        )
+
 
 def list_workflows():
     with connect() as c:
@@ -49,6 +65,7 @@ def list_workflows():
             "SELECT id,name,created_at,updated_at FROM workflows ORDER BY updated_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
 
 def get_workflow(workflow_id):
     with connect() as c:
@@ -59,6 +76,7 @@ def get_workflow(workflow_id):
         d["api_prompt"] = json.loads(d["api_prompt"])
         d["ui_workflow"] = json.loads(d["ui_workflow"]) if d["ui_workflow"] else None
         return d
+
 
 def save_workflow(workflow_id, name, api_prompt, ui_workflow=None):
     now = utcnow()
@@ -82,27 +100,27 @@ def save_workflow(workflow_id, name, api_prompt, ui_workflow=None):
             )
     return get_workflow(workflow_id)
 
+
 def delete_workflow(workflow_id):
     with connect() as c:
         c.execute("DELETE FROM workflows WHERE id=?", (workflow_id,))
 
-def create_job(local_id, workflow_id, request_payload):
+
+def create_job(local_id, workflow_id, request_payload, *, priority="medium", salad_queue=None):
     now = utcnow()
     with connect() as c:
         c.execute(
             """INSERT INTO jobs
-               (id,salad_job_id,workflow_id,state,request_json,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               (id,salad_job_id,workflow_id,state,request_json,
+                priority,salad_queue,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (
-                local_id,
-                None,
-                workflow_id,
-                "submitting",
+                local_id, None, workflow_id, "submitting",
                 json.dumps(request_payload, separators=(",", ":")),
-                now,
-                now,
+                priority, salad_queue, now, now,
             ),
         )
+
 
 def update_job(local_id, *, salad_job_id=None, state=None, output=None, error=None):
     fields = ["updated_at=?"]
@@ -123,6 +141,7 @@ def update_job(local_id, *, salad_job_id=None, state=None, output=None, error=No
     with connect() as c:
         c.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", values)
 
+
 def get_job(local_id):
     with connect() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (local_id,)).fetchone()
@@ -134,15 +153,17 @@ def get_job(local_id):
         d["output"] = json.loads(raw) if raw else None
         return d
 
+
 def list_jobs(limit=50):
     limit = max(1, min(int(limit), 200))
     with connect() as c:
         rows = c.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
+
     result = []
-    for r in rows:
-        d = dict(r)
+    for row in rows:
+        d = dict(row)
         d["request"] = json.loads(d.pop("request_json"))
         raw = d.pop("output_json")
         d["output"] = json.loads(raw) if raw else None

@@ -6,7 +6,6 @@ cd "$ROOT_DIR"
 
 if [[ ! -f .env ]]; then
     echo "ERROR: $ROOT_DIR/.env does not exist." >&2
-    echo "Create it from .env.example and add secrets first." >&2
     exit 1
 fi
 
@@ -16,11 +15,11 @@ set +a
 
 export SALAD_ORG="${SALAD_ORG:-imanprojects}"
 export SALAD_PROJECT="${SALAD_PROJECT:-comfy}"
-export SALAD_QUEUE="${SALAD_QUEUE:-qwen-comfyui}"
-export SALAD_CONTAINER_GROUP="${SALAD_CONTAINER_GROUP:-qwen-comfyui-fp8}"
+export SALAD_QUEUE_PREFIX="${SALAD_QUEUE_PREFIX:-qwen-comfyui}"
+export SALAD_CONTAINER_GROUP_PREFIX="${SALAD_CONTAINER_GROUP_PREFIX:-qwen-comfyui-fp8}"
+export SALAD_DEFAULT_PRIORITY="${SALAD_DEFAULT_PRIORITY:-medium}"
 export SALAD_IMAGE="${SALAD_IMAGE:-ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8}"
 export SALAD_GPU_NAMES="${SALAD_GPU_NAMES:-RTX 4090 (24 GB),RTX 5090 (32 GB)}"
-export SALAD_PRIORITY="${SALAD_PRIORITY:-batch}"
 export SALAD_INITIAL_REPLICAS="${SALAD_INITIAL_REPLICAS:-0}"
 export SALAD_MIN_REPLICAS="${SALAD_MIN_REPLICAS:-0}"
 export SALAD_MAX_REPLICAS="${SALAD_MAX_REPLICAS:-1}"

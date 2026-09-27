@@ -22,16 +22,22 @@ const blankWorkflow = JSON.stringify({
   }
 }, null, 2);
 
+const PRIORITY_OPTIONS = [
+  { value: "high", label: "High", help: "Highest availability, highest cost" },
+  { value: "medium", label: "Medium — Default", help: "Balanced availability and cost" },
+  { value: "low", label: "Low", help: "Lower cost, more interruptions" },
+  { value: "batch", label: "Batch / Lowest", help: "Lowest cost; may wait for capacity" }
+];
+
 export default function App() {
   const [workflows, setWorkflows] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowName, setWorkflowName] = useState("");
   const [workflowJson, setWorkflowJson] = useState(blankWorkflow);
-  const [variables, setVariables] = useState(JSON.stringify({
-    "input.image_1": ""
-  }, null, 2));
+  const [variables, setVariables] = useState(JSON.stringify({"input.image_1": ""}, null, 2));
   const [selected, setSelected] = useState("");
+  const [priority, setPriority] = useState("medium");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -58,6 +64,7 @@ export default function App() {
     try {
       const parsed = JSON.parse(workflowJson);
       if (!workflowId.trim()) throw new Error("Workflow ID is required");
+
       await api(`/workflows/${encodeURIComponent(workflowId.trim())}`, {
         method: "PUT",
         headers: {"Content-Type": "application/json"},
@@ -67,9 +74,11 @@ export default function App() {
           api_prompt: parsed
         })
       });
+
       setMessage("Workflow saved.");
       await refreshWorkflows();
       setSelected(workflowId.trim());
+
     } catch (e) {
       setMessage(e.message);
     } finally {
@@ -80,6 +89,7 @@ export default function App() {
   async function loadWorkflow(id) {
     setSelected(id);
     if (!id) return;
+
     try {
       const w = await api(`/workflows/${encodeURIComponent(id)}`);
       setWorkflowId(w.id);
@@ -92,16 +102,21 @@ export default function App() {
 
   async function uploadFile(file) {
     if (!file) return;
+
     setBusy(true);
     setMessage("Uploading...");
+
     try {
       const form = new FormData();
       form.append("file", file);
       const out = await api("/uploads", {method: "POST", body: form});
+
       const vars = JSON.parse(variables || "{}");
       vars["input.image_1"] = out.url;
       setVariables(JSON.stringify(vars, null, 2));
+
       setMessage("Upload complete. input.image_1 was filled with a signed R2 URL.");
+
     } catch (e) {
       setMessage(e.message);
     } finally {
@@ -111,17 +126,25 @@ export default function App() {
 
   async function run() {
     if (!selected) return setMessage("Choose a workflow first.");
+
     setBusy(true);
     setMessage("");
+
     try {
       const vars = JSON.parse(variables || "{}");
       const out = await api("/jobs", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({workflow_id: selected, variables: vars})
+        body: JSON.stringify({
+          workflow_id: selected,
+          variables: vars,
+          priority
+        })
       });
-      setMessage(`Submitted: ${out.id}`);
+
+      setMessage(`Submitted: ${out.id} · Priority: ${out.priority || priority}`);
       await refreshJobs();
+
     } catch (e) {
       setMessage(e.message);
     } finally {
@@ -132,6 +155,11 @@ export default function App() {
   const selectedName = useMemo(
     () => workflows.find(w => w.id === selected)?.name || selected,
     [workflows, selected]
+  );
+
+  const priorityHelp = useMemo(
+    () => PRIORITY_OPTIONS.find(p => p.value === priority)?.help || "",
+    [priority]
   );
 
   return (
@@ -155,6 +183,7 @@ export default function App() {
       <section className="grid">
         <article className="card">
           <h2>1. Workflow library</h2>
+
           <label>Saved workflow</label>
           <select value={selected} onChange={e => loadWorkflow(e.target.value)}>
             <option value="">Choose...</option>
@@ -166,41 +195,71 @@ export default function App() {
           <div className="two">
             <div>
               <label>ID</label>
-              <input value={workflowId} onChange={e => setWorkflowId(e.target.value)}
-                     placeholder="01-general-editor" />
+              <input
+                value={workflowId}
+                onChange={e => setWorkflowId(e.target.value)}
+                placeholder="01-general-editor"
+              />
             </div>
             <div>
               <label>Name</label>
-              <input value={workflowName} onChange={e => setWorkflowName(e.target.value)}
-                     placeholder="General Editor" />
+              <input
+                value={workflowName}
+                onChange={e => setWorkflowName(e.target.value)}
+                placeholder="General Editor"
+              />
             </div>
           </div>
 
           <label>ComfyUI API Format JSON</label>
-          <textarea className="code large" value={workflowJson}
-                    onChange={e => setWorkflowJson(e.target.value)} />
+          <textarea
+            className="code large"
+            value={workflowJson}
+            onChange={e => setWorkflowJson(e.target.value)}
+          />
 
           <button disabled={busy} onClick={saveWorkflow}>Save workflow</button>
         </article>
 
         <article className="card">
           <h2>2. Inputs & Run</h2>
+
           <p className="muted">
             Selected: <strong>{selectedName || "none"}</strong>
           </p>
 
           <label>Upload Image 1</label>
-          <input type="file" accept="image/*" onChange={e => uploadFile(e.target.files?.[0])} />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={e => uploadFile(e.target.files?.[0])}
+          />
 
           <label>Variables JSON</label>
-          <textarea className="code" value={variables}
-                    onChange={e => setVariables(e.target.value)} />
+          <textarea
+            className="code"
+            value={variables}
+            onChange={e => setVariables(e.target.value)}
+          />
 
           <p className="hint">
             Placeholder example: <code>{"{{input.image_1}}"}</code>
           </p>
 
-          <button className="primary" disabled={busy || !selected} onClick={run}>
+          <label>GPU priority for this run</label>
+          <select value={priority} onChange={e => setPriority(e.target.value)}>
+            {PRIORITY_OPTIONS.map(item => (
+              <option key={item.value} value={item.value}>{item.label}</option>
+            ))}
+          </select>
+
+          <p className="hint">{priorityHelp}</p>
+
+          <button
+            className="primary"
+            disabled={busy || !selected}
+            onClick={run}
+          >
             Run on Salad GPU
           </button>
         </article>
@@ -214,6 +273,7 @@ export default function App() {
 
         <div className="joblist">
           {jobs.length === 0 && <p className="muted">No jobs yet.</p>}
+
           {jobs.map(j => (
             <Job key={j.id} job={j} />
           ))}
@@ -225,16 +285,22 @@ export default function App() {
 
 function Job({job}) {
   const images = collectImages(job.output);
+
   return (
     <div className="job">
       <div>
         <strong>{job.workflow_id}</strong>
         <div className="mono">{job.id}</div>
+        <div className="hint">Priority: {job.priority || "medium"}</div>
       </div>
+
       <span className={`pill ${job.state}`}>{job.state}</span>
+
       <div className="outputs">
         {images.map((u, i) => (
-          <a key={i} href={u} target="_blank" rel="noreferrer">output {i + 1}</a>
+          <a key={i} href={u} target="_blank" rel="noreferrer">
+            output {i + 1}
+          </a>
         ))}
       </div>
     </div>
@@ -243,13 +309,18 @@ function Job({job}) {
 
 function collectImages(value) {
   const found = [];
+
   function walk(v) {
     if (Array.isArray(v)) return v.forEach(walk);
     if (v && typeof v === "object") return Object.values(v).forEach(walk);
+
     if (typeof v === "string" && /^https?:\/\//.test(v)) {
-      if (/\.(png|jpe?g|webp)(\?|$)/i.test(v) || v.includes("X-Amz-")) found.push(v);
+      if (/\.(png|jpe?g|webp)(\?|$)/i.test(v) || v.includes("X-Amz-")) {
+        found.push(v);
+      }
     }
   }
+
   walk(value);
   return [...new Set(found)].slice(0, 8);
 }
