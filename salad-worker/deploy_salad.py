@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.3"
+USER_AGENT = "comfyui-controller/1.4"
 PRIORITIES = ("high", "medium", "low", "batch")
 
 SENSITIVE_KEYS = {
@@ -22,8 +22,10 @@ SENSITIVE_KEYS = {
 
 def env(name, default=None, required=False):
     value = os.getenv(name, default)
+
     if required and not value:
         raise SystemExit(f"Missing {name}")
+
     return value
 
 
@@ -34,10 +36,10 @@ QUEUE_PREFIX = env("SALAD_QUEUE_PREFIX", "qwen-comfyui")
 GROUP_PREFIX = env("SALAD_CONTAINER_GROUP_PREFIX", "qwen-comfyui-fp8")
 IMAGE = env(
     "SALAD_IMAGE",
-    "ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8",
+    "ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked",
 )
 
-SETTLE_TIMEOUT = int(env("SALAD_CONFIG_SETTLE_TIMEOUT", "300"))
+SETTLE_TIMEOUT = int(env("SALAD_CONFIG_SETTLE_TIMEOUT", "600"))
 SETTLE_POLL_SECONDS = int(env("SALAD_CONFIG_SETTLE_POLL_SECONDS", "5"))
 
 
@@ -82,11 +84,13 @@ def request(
 def redact_secrets(value):
     if isinstance(value, dict):
         output = {}
+
         for key, item in value.items():
             if str(key).lower() in SENSITIVE_KEYS and item:
                 output[key] = "***REDACTED***"
             else:
                 output[key] = redact_secrets(item)
+
         return output
 
     if isinstance(value, list):
@@ -104,6 +108,7 @@ def gpu_classes():
         "GET",
         f"/organizations/{ORG}/gpu-classes",
     )
+
     items = data.get(
         "items",
         data if isinstance(data, list) else [],
@@ -130,6 +135,7 @@ def gpu_classes():
 
     for wanted_name in wanted:
         item = available_by_name.get(wanted_name)
+
         if item is None:
             missing.append(wanted_name)
         else:
@@ -192,11 +198,7 @@ def group_exists(priority):
 
 
 def queue_payload(priority):
-    label = (
-        "Batch Lowest"
-        if priority == "batch"
-        else priority.title()
-    )
+    label = "Batch Lowest" if priority == "batch" else priority.title()
 
     return {
         "name": queue_name(priority),
@@ -206,20 +208,46 @@ def queue_payload(priority):
 
 def autoscaler_payload():
     return {
-        "min_replicas": int(
-            env("SALAD_MIN_REPLICAS", "0")
-        ),
-        "max_replicas": int(
-            env("SALAD_MAX_REPLICAS", "1")
-        ),
+        "min_replicas": int(env("SALAD_MIN_REPLICAS", "0")),
+        "max_replicas": int(env("SALAD_MAX_REPLICAS", "1")),
         "desired_queue_length": int(
             env("SALAD_DESIRED_QUEUE_LENGTH", "1")
         ),
-        "polling_period": int(
-            env("SALAD_POLLING_PERIOD", "30")
-        ),
+        "polling_period": int(env("SALAD_POLLING_PERIOD", "30")),
         "max_upscale_per_minute": 1,
         "max_downscale_per_minute": 1,
+    }
+
+
+def readiness_probe_payload():
+    return {
+        "http": {
+            "path": "/ready",
+            "port": 3000,
+            "scheme": "http",
+            "headers": [],
+        },
+        "initial_delay_seconds": 10,
+        "period_seconds": 10,
+        "timeout_seconds": 5,
+        "success_threshold": 1,
+        "failure_threshold": 60,
+    }
+
+
+def startup_probe_payload():
+    return {
+        "http": {
+            "path": "/health",
+            "port": 3000,
+            "scheme": "http",
+            "headers": [],
+        },
+        "initial_delay_seconds": 120,
+        "period_seconds": 30,
+        "timeout_seconds": 5,
+        "success_threshold": 1,
+        "failure_threshold": 60,
     }
 
 
@@ -229,6 +257,9 @@ def environment_payload():
         "PORT": "3000",
         "LRU_CACHE_SIZE_GB": "40",
         "SALAD_LOG_LEVEL": "info",
+        "READY_TIMEOUT_SECONDS": "1800",
+        "STARTUP_CHECK_MAX_TRIES": "360",
+        "STARTUP_CHECK_INTERVAL_S": "5",
         "AWS_ACCESS_KEY_ID": env(
             "R2_ACCESS_KEY_ID",
             required=True,
@@ -237,10 +268,7 @@ def environment_payload():
             "R2_SECRET_ACCESS_KEY",
             required=True,
         ),
-        "AWS_REGION": env(
-            "R2_REGION",
-            "auto",
-        ),
+        "AWS_REGION": env("R2_REGION", "auto"),
         "AWS_ENDPOINT_URL_S3": env(
             "R2_ENDPOINT_URL",
             required=True,
@@ -252,6 +280,7 @@ def environment_payload():
     }
 
     hf_token = env("HF_TOKEN", "")
+
     if hf_token:
         values["HF_TOKEN"] = hf_token
 
@@ -259,11 +288,7 @@ def environment_payload():
 
 
 def group_payload(gpus, priority):
-    label = (
-        "Batch Lowest"
-        if priority == "batch"
-        else priority.title()
-    )
+    label = "Batch Lowest" if priority == "batch" else priority.title()
 
     return {
         "name": group_name(priority),
@@ -275,17 +300,12 @@ def group_payload(gpus, priority):
                 "memory": 16384,
                 "shm_size": 2048,
                 "storage_amount": 53687091200,
-                "gpu_classes": [
-                    gpu["id"]
-                    for gpu in gpus
-                ],
+                "gpu_classes": [gpu["id"] for gpu in gpus],
             },
             "environment_variables": environment_payload(),
             "priority": priority,
         },
-        "replicas": int(
-            env("SALAD_INITIAL_REPLICAS", "0")
-        ),
+        "replicas": int(env("SALAD_INITIAL_REPLICAS", "0")),
         "restart_policy": "always",
         "autostart_policy": True,
         "queue_connection": {
@@ -294,32 +314,8 @@ def group_payload(gpus, priority):
             "queue_name": queue_name(priority),
         },
         "queue_autoscaler": autoscaler_payload(),
-        "readiness_probe": {
-            "http": {
-                "path": "/ready",
-                "port": 3000,
-                "scheme": "http",
-                "headers": [],
-            },
-            "initial_delay_seconds": 10,
-            "period_seconds": 10,
-            "timeout_seconds": 5,
-            "success_threshold": 1,
-            "failure_threshold": 20,
-        },
-        "startup_probe": {
-            "http": {
-                "path": "/health",
-                "port": 3000,
-                "scheme": "http",
-                "headers": [],
-            },
-            "initial_delay_seconds": 120,
-            "period_seconds": 30,
-            "timeout_seconds": 5,
-            "success_threshold": 1,
-            "failure_threshold": 20,
-        },
+        "readiness_probe": readiness_probe_payload(),
+        "startup_probe": startup_probe_payload(),
     }
 
 
@@ -342,6 +338,7 @@ def wait_for_group_settle(priority, phase):
                 f"Waiting for {group_name(priority)} "
                 f"to become readable..."
             )
+
             time.sleep(SETTLE_POLL_SECONDS)
             continue
 
@@ -368,8 +365,17 @@ def wait_for_group_settle(priority, phase):
         time.sleep(SETTLE_POLL_SECONDS)
 
 
-def sync_autoscaler(priority):
-    desired = autoscaler_payload()
+def sync_group_config(priority):
+    desired = {
+        "container": {
+            "image": IMAGE,
+            "environment_variables": environment_payload(),
+        },
+        "queue_autoscaler": autoscaler_payload(),
+        "readiness_probe": readiness_probe_payload(),
+        "startup_probe": startup_probe_payload(),
+    }
+
     deadline = time.monotonic() + SETTLE_TIMEOUT
 
     while True:
@@ -377,15 +383,12 @@ def sync_autoscaler(priority):
             result = request(
                 "PATCH",
                 group_path(priority),
-                {"queue_autoscaler": desired},
+                desired,
                 content_type="application/merge-patch+json",
             )
 
-            returned = result.get("queue_autoscaler")
-
             print(
-                f"Autoscaler PATCH {priority}: "
-                f"{'OK' if returned else 'accepted'}"
+                f"Runtime/autoscaler PATCH {priority}: accepted"
             )
 
             return result
@@ -400,9 +403,8 @@ def sync_autoscaler(priority):
                 raise
 
             print(
-                f"Autoscaler PATCH {priority}: "
-                f"previous update still pending; retrying "
-                f"in {SETTLE_POLL_SECONDS}s..."
+                f"PATCH {priority}: previous update still pending; "
+                f"retrying in {SETTLE_POLL_SECONDS}s..."
             )
 
             time.sleep(SETTLE_POLL_SECONDS)
@@ -419,12 +421,15 @@ def verify_group(priority):
     actual_priority = group.get("priority")
     connection = group.get("queue_connection")
     autoscaler = group.get("queue_autoscaler")
+    container = group.get("container") or {}
+    image = container.get("image")
 
     print(
         f"Verify {priority}: "
         f"priority={actual_priority!r}, "
         f"queue_connection={'YES' if connection else 'NO'}, "
-        f"queue_autoscaler={'YES' if autoscaler else 'NO'}"
+        f"queue_autoscaler={'YES' if autoscaler else 'NO'}, "
+        f"image={image!r}"
     )
 
     if actual_priority != priority:
@@ -440,19 +445,25 @@ def verify_group(priority):
 
     if not autoscaler:
         raise RuntimeError(
-            f"{group_name(priority)} has no queue_autoscaler "
-            "even after PATCH."
+            f"{group_name(priority)} has no queue_autoscaler."
         )
 
     desired = autoscaler_payload()
 
     for key, expected in desired.items():
         actual = autoscaler.get(key)
+
         if actual != expected:
             raise RuntimeError(
                 f"{group_name(priority)} autoscaler mismatch "
                 f"for {key}: expected {expected!r}, got {actual!r}"
             )
+
+    if image and image != IMAGE:
+        raise RuntimeError(
+            f"{group_name(priority)} image mismatch: "
+            f"expected {IMAGE!r}, got {image!r}"
+        )
 
     return group
 
@@ -464,40 +475,27 @@ def create_or_check(gpus, priority, apply):
     print(f"\n=== {priority.upper()} ===")
     print("Queue:", queue_name(priority))
     print("Container group:", group_name(priority))
+    print("Image:", IMAGE)
 
     if not apply:
         print("Queue payload:")
-        print(
-            json.dumps(
-                redact_secrets(qp),
-                indent=2,
-            )
-        )
+        print(json.dumps(redact_secrets(qp), indent=2))
 
         print("Container group payload:")
-        print(
-            json.dumps(
-                redact_secrets(gp),
-                indent=2,
-            )
-        )
+        print(json.dumps(redact_secrets(gp), indent=2))
 
         print(
-            "Apply behavior: create missing resources, "
-            "wait for Salad to settle, PATCH queue_autoscaler, "
-            "wait again, then verify."
+            "Apply behavior: create missing resources, wait for settle, "
+            "sync image/runtime probes/autoscaler, wait again, verify."
         )
         return
 
     if queue_exists(priority) is None:
         print("Creating queue...")
+
         request(
             "POST",
-            (
-                f"/organizations/{ORG}"
-                f"/projects/{PROJECT}"
-                f"/queues"
-            ),
+            f"/organizations/{ORG}/projects/{PROJECT}/queues",
             qp,
         )
     else:
@@ -505,24 +503,18 @@ def create_or_check(gpus, priority, apply):
 
     if group_exists(priority) is None:
         print("Creating container group...")
+
         request(
             "POST",
-            (
-                f"/organizations/{ORG}"
-                f"/projects/{PROJECT}"
-                f"/containers"
-            ),
+            f"/organizations/{ORG}/projects/{PROJECT}/containers",
             gp,
         )
     else:
         print("Container group already exists.")
 
-    wait_for_group_settle(priority, "before autoscaler PATCH")
-
-    sync_autoscaler(priority)
-
-    wait_for_group_settle(priority, "after autoscaler PATCH")
-
+    wait_for_group_settle(priority, "before runtime PATCH")
+    sync_group_config(priority)
+    wait_for_group_settle(priority, "after runtime PATCH")
     verify_group(priority)
 
 
@@ -532,7 +524,7 @@ def main():
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Create missing resources and sync autoscaling",
+        help="Create missing resources and sync runtime/autoscaling",
     )
 
     parser.add_argument(
@@ -543,11 +535,7 @@ def main():
 
     args = parser.parse_args()
 
-    selected = (
-        (args.priority,)
-        if args.priority
-        else PRIORITIES
-    )
+    selected = (args.priority,) if args.priority else PRIORITIES
 
     print(f"Organization: {ORG}")
     print(f"Project: {PROJECT}")

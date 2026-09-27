@@ -1,26 +1,20 @@
+# Large Qwen base + text encoder are baked into the Docker image.
 models:
   before_start:
-    - url: https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors
-      local_path: /opt/ComfyUI/models/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors
-    - url: https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
-      local_path: /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
     - url: https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
       local_path: /opt/ComfyUI/models/vae/qwen_image_vae.safetensors
     - url: https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
       local_path: /opt/ComfyUI/models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
-    - url: https://huggingface.co/prithivMLmods/Qwen-Image-Edit-2511-Unblur-Upscale/resolve/main/Qwen-Image-Edit-Unblur-Upscale_20.safetensors
-      local_path: /opt/ComfyUI/models/loras/Qwen-Image-Edit-Unblur-Upscale_20.safetensors
     - url: https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/inswapper_128.onnx
       local_path: /opt/ComfyUI/models/insightface/inswapper_128.onnx
 
   after_start:
+    - url: https://huggingface.co/prithivMLmods/Qwen-Image-Edit-2511-Unblur-Upscale/resolve/main/Qwen-Image-Edit-Unblur-Upscale_20.safetensors
+      local_path: /opt/ComfyUI/models/loras/Qwen-Image-Edit-Unblur-Upscale_20.safetensors
     - url: https://huggingface.co/prithivMLmods/Qwen-Image-Edit-2511-Ultra-Realistic-Portrait/resolve/main/URP_20.safetensors
       local_path: /opt/ComfyUI/models/loras/URP_20.safetensors
     - url: https://huggingface.co/prithivMLmods/Qwen-Image-Edit-2511-Hyper-Realistic-Portrait/resolve/main/HRP_20.safetensors
       local_path: /opt/ComfyUI/models/loras/HRP_20.safetensors
     - url: https://huggingface.co/lrzjason/Anything2Real/resolve/main/anything2real_2601_A_final_patched.safetensors
       local_path: /opt/ComfyUI/models/loras/anything2real_2601_A_final_patched.safetensors
-    - url: https://huggingface.co/Baraje/SexGod_NSFW_Female_Nudes_QWEN_Image_Edit_2511/resolve/main/SEXGOD_FemaleNudity_QwenEdit_2511_v2.safetensors
-      local_path: /opt/ComfyUI/models/loras/SEXGOD_FemaleNudity_QwenEdit_2511_v2.safetensors
-    - url: https://huggingface.co/ScottzillaSystems/qwen-image-edit-plus-nsfw-lora/resolve/main/qwen-image-edit-plus-nsfw-lora.safetensors
-      local_path: /opt/ComfyUI/models/loras/qwen-image-edit-plus-nsfw-lora.safetensors
+

@@ -17,10 +17,25 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # The baked image contains ~30 GB of Qwen safetensors. GitHub-hosted
+      # runners ship with large SDKs we do not need; remove them before BuildKit.
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -eux
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -32,19 +47,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push FP8 Salad worker
+      - name: Build and push baked FP8 Salad worker
         uses: docker/build-push-action@v6
         with:
           context: ./salad-worker
           file: ./salad-worker/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           build-args: |
             MODEL_PROFILE=fp8
           tags: |
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked
             ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8
             ghcr.io/imannasresfahani/comfyui-controller-salad-worker:latest
           labels: |
             org.opencontainers.image.source=https://github.com/ImanNasrEsfahani/comfyui-controller
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Show published image
+        run: |
+          docker buildx imagetools inspect \
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked
