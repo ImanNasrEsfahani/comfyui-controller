@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.4"
+USER_AGENT = "comfyui-controller/1.4.1"
 PRIORITIES = ("high", "medium", "low", "batch")
 
 SENSITIVE_KEYS = {
@@ -227,11 +227,13 @@ def readiness_probe_payload():
             "scheme": "http",
             "headers": [],
         },
-        "initial_delay_seconds": 10,
-        "period_seconds": 10,
+        # Readiness failures only keep the instance out of service.
+        # Salad API allows failure_threshold up to 20.
+        "initial_delay_seconds": 30,
+        "period_seconds": 30,
         "timeout_seconds": 5,
         "success_threshold": 1,
-        "failure_threshold": 60,
+        "failure_threshold": 20,
     }
 
 
@@ -243,11 +245,13 @@ def startup_probe_payload():
             "scheme": "http",
             "headers": [],
         },
+        # Keep roughly a 30-minute startup safety window while respecting
+        # Salad's failure_threshold <= 20 and period_seconds <= 120 limits.
         "initial_delay_seconds": 120,
-        "period_seconds": 30,
+        "period_seconds": 90,
         "timeout_seconds": 5,
         "success_threshold": 1,
-        "failure_threshold": 60,
+        "failure_threshold": 20,
     }
 
 
