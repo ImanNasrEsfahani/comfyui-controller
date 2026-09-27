@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.4.1"
+USER_AGENT = "comfyui-controller/1.4.2"
 PRIORITIES = ("high", "medium", "low", "batch")
 
 SENSITIVE_KEYS = {
@@ -472,6 +472,69 @@ def verify_group(priority):
     return group
 
 
+
+def ensure_container_group(gpus, priority):
+    """
+    Return an existing group, or create it.
+
+    Salad can briefly return 404 for GET while the same name is still
+    reserved, causing POST to return name_conflict. Treat that as a
+    control-plane consistency/race condition: wait for the existing group
+    to become addressable, or retry creation if the name is later released.
+    """
+    deadline = time.monotonic() + SETTLE_TIMEOUT
+    attempt = 0
+
+    while True:
+        attempt += 1
+
+        existing = group_exists(priority)
+        if existing is not None:
+            if attempt > 1:
+                print(
+                    f"Container group became visible after "
+                    f"{attempt} checks."
+                )
+            return existing
+
+        try:
+            print(
+                "Container group not readable yet; "
+                "attempting create..."
+            )
+
+            created = request(
+                "POST",
+                f"/organizations/{ORG}/projects/{PROJECT}/containers",
+                group_payload(gpus, priority),
+            )
+
+            print("Container group create accepted.")
+            return created
+
+        except RuntimeError as exc:
+            message = str(exc)
+
+            if "name_conflict" not in message:
+                raise
+
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"{group_name(priority)} is still reserved by Salad "
+                    f"but cannot be fetched after {SETTLE_TIMEOUT}s. "
+                    "Do not create another name; inspect the existing/"
+                    "deleting group in Salad."
+                ) from exc
+
+            print(
+                f"Name {group_name(priority)!r} is already reserved, "
+                f"but GET is not returning it yet. "
+                f"Waiting {SETTLE_POLL_SECONDS}s and retrying..."
+            )
+
+            time.sleep(SETTLE_POLL_SECONDS)
+
+
 def create_or_check(gpus, priority, apply):
     qp = queue_payload(priority)
     gp = group_payload(gpus, priority)
@@ -505,16 +568,16 @@ def create_or_check(gpus, priority, apply):
     else:
         print("Queue already exists.")
 
-    if group_exists(priority) is None:
-        print("Creating container group...")
+    existing_group = group_exists(priority)
 
-        request(
-            "POST",
-            f"/organizations/{ORG}/projects/{PROJECT}/containers",
-            gp,
-        )
-    else:
+    if existing_group is not None:
         print("Container group already exists.")
+    else:
+        print(
+            "Container group was not returned by GET. "
+            "Resolving existing/create race safely..."
+        )
+        ensure_container_group(gpus, priority)
 
     wait_for_group_settle(priority, "before runtime PATCH")
     sync_group_config(priority)
