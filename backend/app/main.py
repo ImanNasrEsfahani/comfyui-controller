@@ -46,7 +46,7 @@ class WorkflowIn(BaseModel):
 class JobIn(BaseModel):
     workflow_id: str
     variables: dict[str, Any] = Field(default_factory=dict)
-    priority: Literal["high", "medium", "low", "batch"] = "medium"
+    priority: Literal["medium"] = "medium"
 
 
 @app.get("/health")

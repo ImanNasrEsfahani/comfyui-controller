@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 import os
 
-VALID_SALAD_PRIORITIES = ("high", "medium", "low", "batch")
+# New jobs are deliberately restricted to the sole deployed Medium Queue.
+VALID_SALAD_PRIORITIES = ("medium",)
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class Settings:
     salad_project: str = os.getenv("SALAD_PROJECT", "comfy").strip()
     salad_queue_prefix: str = os.getenv("SALAD_QUEUE_PREFIX", "qwen-comfyui").strip()
     salad_default_priority: str = os.getenv("SALAD_DEFAULT_PRIORITY", "medium").strip().lower()
+    # Only for polling historical jobs that were submitted before this change.
     salad_legacy_queue: str = os.getenv("SALAD_LEGACY_QUEUE", "qwen-comfyui").strip()
 
     r2_endpoint_url: str = os.getenv(
@@ -55,15 +57,14 @@ class Settings:
         if missing:
             raise RuntimeError("Missing Salad configuration: " + ", ".join(missing))
         if self.salad_default_priority not in VALID_SALAD_PRIORITIES:
-            raise RuntimeError(
-                "SALAD_DEFAULT_PRIORITY must be one of: "
-                + ", ".join(VALID_SALAD_PRIORITIES)
-            )
+            raise RuntimeError("SALAD_DEFAULT_PRIORITY must be 'medium'")
+        if self.salad_queue_prefix != "qwen-comfyui":
+            raise RuntimeError("SALAD_QUEUE_PREFIX must be 'qwen-comfyui'")
 
-    def salad_queue_name(self, priority: str) -> str:
+    def salad_queue_name(self, priority: str):
         value = (priority or self.salad_default_priority).strip().lower()
         if value not in VALID_SALAD_PRIORITIES:
-            raise ValueError("priority must be one of: " + ", ".join(VALID_SALAD_PRIORITIES))
+            raise ValueError("Only medium priority is enabled")
         return f"{self.salad_queue_prefix}-{value}"
 
     def validate_runtime(self):
