@@ -1,57 +1,64 @@
-# Salad GPU Worker — one Medium group only
+# Salad single-group deployment — .env is authoritative
 
-One queue and one queue-autoscaled, scale-to-zero Container Group:
+All configurable values (group/queue names, priority, GPU, resource amounts,
+worker image, scaling, health probes, API settings and credentials) are read
+from the **root private `.env`**. Do not put real credentials in GitHub.
+
+The example configuration defines:
 
 - Queue: `qwen-comfyui-medium`
-- Container Group: `qwen-comfyui-fp8-medium`
-- Priority: `medium`
-- GPU class: **only RTX 5090 (32 GB VRAM)**
-- 4 vCPU; **30 GB system RAM** (30720 MB); 2048 MB shared memory; **100 GB disk**
-- Replicas: initial=0, min=0, max=1; a queued job can request one GPU replica.
-- Worker image: `ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked`
+- Container group: `qwen-comfyui-5090-medium` (new name avoids the deleted group's reservation)
+- Priority: `medium`; RTX 5090 (32 GB VRAM); 4 vCPU; 30 GB RAM; 2 GB SHM; 100 GB disk
+- Initial/min/max replicas: `0/0/1`, queue-triggered scale-to-zero.
 
-**Important:** The worker image above is the existing baked ComfyUI API/Job Queue worker.
-It is **not** the generic `pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime`
-image used in the successful interactive *installation-only* test. This deployment
-change does not certify that the worker image has the exact tested runtime.
-The `qwen-vast-recovery` installer and its pinned commit are left untouched.
+These are **example `.env` values**, not constants inside the deployer or backend.
+Change only the root `.env` to rename/configure the group. A changed group name
+creates a different Salad resource; it does NOT automatically delete the previous one.
 
-## Apply to a full repository checkout
+## Apply on GitHub FIRST
 
-1. Extract the supplied replacement ZIP over the root of `comfyui-controller`.
-2. Run `python3 scripts/apply-medium-frontend.py` to update the existing `frontend/src/App.jsx`.
-3. Merge updated values from `.env.example` into the existing, secret-bearing `.env`.
-   **Never commit `.env`.** Keep `SALAD_API_KEY`, R2 credentials and tokens local.
-4. Commit and push the modified tracked files (`git add ...`, then `git commit` and `git push`).
-5. On the server, `git pull`; merge runtime `.env` values; rebuild frontend/backend:
-   `docker compose up -d --build backend frontend`.
-6. In a shell at the repo root, check without making changes:
-   `bash scripts/salad-deploy.sh --priority medium`
-7. After inspecting the output, apply:
-   `bash scripts/salad-deploy.sh --apply --priority medium`
+1. Extract the replacement ZIP over a full checkout of `comfyui-controller`.
+2. Run `python3 scripts/apply-env-source.py` once. This modifies
+   `frontend/src/App.jsx` and `backend/app/db.py`. Commit those two generated
+   changes alongside the replacement files.
+3. Review `git diff` and `git status`; commit and push to GitHub. Never commit `.env`.
 
-The deployer first checks GET for the Queue and group. Missing resources are
-created; an existing Medium group is verified and has supported image/resource/
-probe/autoscaler configuration drift patched. Running replicas are **not**
-automatically started or stopped. Re-running is safe. A conflicting existing
-`queue_connection` triggers a clear error instead of a destructive repair.
+## Update the server AFTER GitHub
 
-## Removing the old groups safely
+1. `cd /var/www/comfyui-controller && git pull`
+2. Run `python3 scripts/sync-env.py`: it backs up `.env` outside the repo
+   and appends missing keys from `.env.example`, preserving existing values.
+3. Review the private `.env`, preserving `SALAD_API_KEY`, `R2_*` secrets and
+   tokens. It is essential
+   to set the new exact-name variables `SALAD_QUEUE_NAME`,
+   `SALAD_CONTAINER_GROUP_NAME`, `SALAD_PRIORITY`, `SALAD_GPU_NAME`, resource
+   sizes, API settings, probe options etc. Remove obsolete variables such as
+   `SALAD_QUEUE_PREFIX`, `SALAD_CONTAINER_GROUP_PREFIX`, `SALAD_DEFAULT_PRIORITY`,
+   `SALAD_GPU_NAMES` to avoid confusion. A missing setting now produces an error.
+4. Rebuild Docker images (recreate alone is NOT a rebuild):
+   `docker compose up -d --build --force-recreate backend frontend`.
+5. Read-only inspection: `bash scripts/salad-deploy.sh`.
+6. Create the missing Queue/Group or repair supported drift:
+   `bash scripts/salad-deploy.sh --apply`.
 
-Ensure old high/low/batch/legacy jobs are finished or cancelled **before** deleting
-old queues. Stop and manually delete the old `High`, `Low`, `Batch Lowest`,
-`Scale-to-Zero`, and `qvr-install-test` groups in the Salad Portal. The Medium
-group can be retained (the script reconciles its 16 GB/50 GB/4090+5090 settings)
-or deleted too, in which case `--apply` recreates it. Remove obsolete queues
-only after historical jobs are no longer needed.
+The script first GETs the exact Queue/Group. On `name_conflict` + GET=404,
+it retries GET and POST until the configured timeout. If Salad keeps the
+name reserved, set a *different* `SALAD_CONTAINER_GROUP_NAME` in `.env`;
+never change the Queue name just to work around an old group-name reservation.
+It neither creates priority tiers nor deletes other groups/queues, nor
+changes the replica count of an existing group. It will not silently
+reconnect an existing group to a different Queue.
 
-**The deployment script never deletes any group or queue automatically.**
+## Important scope
 
-## Notes
+This package does **not** alter `salad-worker/Dockerfile`, the
+`qwen-vast-recovery` installer, its pinned Git commit, model files or LoRAs.
+The configured `fp8-baked` worker image is NOT the same as the generic PyTorch
+image used during the successful interactive installation test. Verify the
+worker's end-to-end readiness and a real job before production use.
 
-- Cloud GPU priority **Medium** is fixed. The Backend rejects new jobs
-  requesting other priorities, and the UI exposes only Medium.
-- `--apply` uses Salad API and requires a real `SALAD_API_KEY`; offline tests only
-  validate the code and mock requests.
-- With 0 replicas, the group does not continuously run a GPU. Autoscaling and
-  image/model cold starts still incur startup latency and billed runtime.
+## Tests
+
+`python3 -m unittest discover -s tests -p 'test_medium_deployment.py' -v`
+
+Tests use mocked Salad API calls: they do not create cloud resources.

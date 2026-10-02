@@ -1,8 +1,6 @@
+"""New jobs always go to SALAD_QUEUE_NAME from the root .env."""
 import httpx
-from .config import settings, VALID_SALAD_PRIORITIES
-
-BASE = "https://api.salad.com/api/public"
-USER_AGENT = "comfyui-controller/1.1"
+from .config import settings
 
 
 def headers():
@@ -11,15 +9,15 @@ def headers():
         "Salad-Api-Key": settings.salad_api_key,
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": USER_AGENT,
+        "User-Agent": settings.salad_user_agent,
     }
 
 
 def normalize_priority(priority: str | None) -> str:
-    value = (priority or settings.salad_default_priority).strip().lower()
-    if value not in VALID_SALAD_PRIORITIES:
-        raise ValueError("priority must be one of: " + ", ".join(VALID_SALAD_PRIORITIES))
-    return value
+    selected = (priority or settings.salad_priority).strip().lower()
+    if selected != settings.salad_priority:
+        raise ValueError(f"Only priority {settings.salad_priority!r} is configured")
+    return selected
 
 
 def queue_name_for_priority(priority: str | None) -> str:
@@ -28,9 +26,8 @@ def queue_name_for_priority(priority: str | None) -> str:
 
 def queue_base(queue_name: str):
     return (
-        f"{BASE}/organizations/{settings.salad_org}"
-        f"/projects/{settings.salad_project}"
-        f"/queues/{queue_name}"
+        f"{settings.salad_api_base_url}/organizations/{settings.salad_org}"
+        f"/projects/{settings.salad_project}/queues/{queue_name}"
     )
 
 
@@ -44,21 +41,19 @@ def submit_job(input_payload: dict, *, priority: str | None = None, metadata: di
     metadata_payload["queue"] = queue_name
     body["metadata"] = metadata_payload
 
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=settings.salad_http_timeout_seconds) as client:
         response = client.post(
-            f"{queue_base(queue_name)}/jobs",
-            headers=headers(),
-            json=body,
+            f"{queue_base(queue_name)}/jobs", headers=headers(), json=body
         )
         response.raise_for_status()
         return response.json(), queue_name, selected_priority
 
 
 def get_job(job_id: str, queue_name: str):
-    with httpx.Client(timeout=30.0) as client:
+    # Historic jobs may have a different saved Queue; do not rewrite it.
+    with httpx.Client(timeout=settings.salad_http_timeout_seconds) as client:
         response = client.get(
-            f"{queue_base(queue_name)}/jobs/{job_id}",
-            headers=headers(),
+            f"{queue_base(queue_name)}/jobs/{job_id}", headers=headers()
         )
         response.raise_for_status()
         return response.json()

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 from pathlib import Path
 import re
@@ -10,7 +10,7 @@ from .config import settings
 from . import db, storage, salad
 from .template import render_template
 
-app = FastAPI(title="Qwen ComfyUI Controller", version="1.1.0")
+app = FastAPI(title=settings.app_name, version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +46,7 @@ class WorkflowIn(BaseModel):
 class JobIn(BaseModel):
     workflow_id: str
     variables: dict[str, Any] = Field(default_factory=dict)
-    priority: Literal["medium"] = "medium"
+    priority: str | None = None
 
 
 @app.get("/health")
@@ -54,7 +54,9 @@ def health():
     return {
         "ok": True,
         "app": settings.app_name,
-        "default_priority": settings.salad_default_priority,
+        "default_priority": settings.salad_priority,
+        "gpu_name": settings.salad_gpu_name,
+        "queue_name": settings.salad_queue_name(),
     }
 
 
@@ -120,6 +122,9 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
 @app.post("/api/jobs")
 def create_job(body: JobIn, x_internal_token: str | None = Header(default=None)):
     check_internal_token(x_internal_token)
+    selected_priority = (body.priority or settings.salad_priority).strip().lower()
+    if selected_priority != settings.salad_priority:
+        raise HTTPException(400, f"Only priority {settings.salad_priority!r} is available")
 
     wf = db.get_workflow(body.workflow_id)
     if not wf:
@@ -131,7 +136,6 @@ def create_job(body: JobIn, x_internal_token: str | None = Header(default=None))
         raise HTTPException(400, str(exc))
 
     local_id = str(uuid4())
-    selected_priority = body.priority or "medium"
     selected_queue = salad.queue_name_for_priority(selected_priority)
 
     prompt_request = {
@@ -207,6 +211,8 @@ def job(local_id: str):
     }:
         try:
             queue_name = item.get("salad_queue") or settings.salad_legacy_queue
+            if not queue_name:
+                raise RuntimeError("Historic job has no queue; set SALAD_LEGACY_QUEUE in .env")
             remote = salad.get_job(salad_id, queue_name)
 
             state = remote.get("status") or remote.get("state") or item["state"]

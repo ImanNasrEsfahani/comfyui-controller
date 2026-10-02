@@ -1,71 +1,75 @@
+"""Runtime configuration. Deployable values have no in-code defaults.
+
+Docker Compose passes root .env via env_file; salad-deploy.sh sources the same file.
+"""
 from dataclasses import dataclass
 import os
 
-# New jobs are deliberately restricted to the sole deployed Medium Queue.
-VALID_SALAD_PRIORITIES = ("medium",)
+
+def value(name):
+    return os.environ.get(name, "").strip()
+
+
+def required(name):
+    result = value(name)
+    if not result:
+        raise RuntimeError(f"Missing setting in root .env: {name}")
+    return result
+
+
+def required_int(name):
+    try:
+        return int(required(name))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
 
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = os.getenv("APP_NAME", "qwen-comfyui-controller")
-    db_path: str = os.getenv("DB_PATH", "/app/data/controller.db")
-    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "100"))
+    app_name: str = required("APP_NAME")
+    db_path: str = required("DB_PATH")
+    max_upload_mb: int = required_int("MAX_UPLOAD_MB")
+    internal_token: str = value("APP_INTERNAL_TOKEN")
 
-    salad_api_key: str = os.getenv("SALAD_API_KEY", "").strip()
-    salad_org: str = os.getenv("SALAD_ORG", "imanprojects").strip()
-    salad_project: str = os.getenv("SALAD_PROJECT", "comfy").strip()
-    salad_queue_prefix: str = os.getenv("SALAD_QUEUE_PREFIX", "qwen-comfyui").strip()
-    salad_default_priority: str = os.getenv("SALAD_DEFAULT_PRIORITY", "medium").strip().lower()
-    # Only for polling historical jobs that were submitted before this change.
-    salad_legacy_queue: str = os.getenv("SALAD_LEGACY_QUEUE", "qwen-comfyui").strip()
+    salad_api_key: str = required("SALAD_API_KEY")
+    salad_api_base_url: str = required("SALAD_API_BASE_URL").rstrip("/")
+    salad_user_agent: str = required("SALAD_USER_AGENT")
+    salad_http_timeout_seconds: int = required_int("SALAD_HTTP_TIMEOUT_SECONDS")
+    salad_org: str = required("SALAD_ORG")
+    salad_project: str = required("SALAD_PROJECT")
+    salad_queue_name_value: str = required("SALAD_QUEUE_NAME")
+    salad_group_name: str = required("SALAD_CONTAINER_GROUP_NAME")
+    salad_priority: str = required("SALAD_PRIORITY").lower()
+    salad_gpu_name: str = required("SALAD_GPU_NAME")
+    salad_legacy_queue: str = value("SALAD_LEGACY_QUEUE")
 
-    r2_endpoint_url: str = os.getenv(
-        "R2_ENDPOINT_URL",
-        "https://4ec2a271e2c8320bc046ad41a67d36f2.r2.cloudflarestorage.com",
-    ).strip()
-    r2_bucket: str = os.getenv("R2_BUCKET", "comfy").strip()
-    r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", "").strip()
-    r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-    r2_region: str = os.getenv("R2_REGION", "auto").strip()
-    r2_presign_ttl_seconds: int = int(os.getenv("R2_PRESIGN_TTL_SECONDS", "21600"))
+    r2_endpoint_url: str = required("R2_ENDPOINT_URL")
+    r2_bucket: str = required("R2_BUCKET")
+    r2_access_key_id: str = required("R2_ACCESS_KEY_ID")
+    r2_secret_access_key: str = required("R2_SECRET_ACCESS_KEY")
+    r2_region: str = required("R2_REGION")
+    r2_presign_ttl_seconds: int = required_int("R2_PRESIGN_TTL_SECONDS")
 
-    internal_token: str = os.getenv("APP_INTERNAL_TOKEN", "").strip()
+    @property
+    def salad_default_priority(self):
+        return self.salad_priority
 
     def validate_r2(self):
-        missing = []
-        for name, value in [
-            ("R2_ENDPOINT_URL", self.r2_endpoint_url),
-            ("R2_BUCKET", self.r2_bucket),
-            ("R2_ACCESS_KEY_ID", self.r2_access_key_id),
-            ("R2_SECRET_ACCESS_KEY", self.r2_secret_access_key),
-        ]:
-            if not value:
-                missing.append(name)
-        if missing:
-            raise RuntimeError("Missing R2 configuration: " + ", ".join(missing))
+        # Required fields are checked at object construction.
+        if self.max_upload_mb <= 0 or self.r2_presign_ttl_seconds <= 0:
+            raise RuntimeError("Upload limit and R2 signed-URL lifetime must be positive")
 
     def validate_salad(self):
-        missing = []
-        for name, value in [
-            ("SALAD_API_KEY", self.salad_api_key),
-            ("SALAD_ORG", self.salad_org),
-            ("SALAD_PROJECT", self.salad_project),
-            ("SALAD_QUEUE_PREFIX", self.salad_queue_prefix),
-        ]:
-            if not value:
-                missing.append(name)
-        if missing:
-            raise RuntimeError("Missing Salad configuration: " + ", ".join(missing))
-        if self.salad_default_priority not in VALID_SALAD_PRIORITIES:
-            raise RuntimeError("SALAD_DEFAULT_PRIORITY must be 'medium'")
-        if self.salad_queue_prefix != "qwen-comfyui":
-            raise RuntimeError("SALAD_QUEUE_PREFIX must be 'qwen-comfyui'")
+        if self.salad_priority not in ("high", "medium", "low", "batch"):
+            raise RuntimeError("Invalid SALAD_PRIORITY in .env")
+        if self.salad_http_timeout_seconds <= 0:
+            raise RuntimeError("SALAD_HTTP_TIMEOUT_SECONDS must be positive")
 
-    def salad_queue_name(self, priority: str):
-        value = (priority or self.salad_default_priority).strip().lower()
-        if value not in VALID_SALAD_PRIORITIES:
-            raise ValueError("Only medium priority is enabled")
-        return f"{self.salad_queue_prefix}-{value}"
+    def salad_queue_name(self, priority=None):
+        selected = (priority or self.salad_priority).strip().lower()
+        if selected != self.salad_priority:
+            raise ValueError(f"Only the configured priority {self.salad_priority!r} is enabled")
+        return self.salad_queue_name_value
 
     def validate_runtime(self):
         self.validate_r2()
@@ -73,3 +77,4 @@ class Settings:
 
 
 settings = Settings()
+settings.validate_runtime()
