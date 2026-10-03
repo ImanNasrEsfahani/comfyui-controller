@@ -14,9 +14,10 @@ ARG SALAD_JOB_QUEUE_WORKER_VERSION=0.7.0
 # INT8 is an alternative to FP8, not an additional runtime requirement.
 # Each download RUN creates at most one 3.0-GB data layer; the worker reassembles
 # the two original safetensors files locally before starting comfyui-api.
+# libgl1 supplies libGL.so.1, required by ReActor's OpenCV (cv2) import.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential python3-dev git curl ca-certificates && \
+      build-essential python3-dev git curl ca-certificates libgl1 && \
     rm -rf /var/lib/apt/lists/*
 
 ENV PIP_CONSTRAINT=/opt/pytorch-constraints.txt
@@ -35,6 +36,10 @@ RUN rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-ReActor && \
     python -m pip uninstall -y onnxruntime onnxruntime-gpu || true && \
     python -m pip install --no-cache-dir "setuptools==81.0.0" "onnxruntime-gpu>=1.27,<2" && \
     rm -rf /root/.cache/pip
+
+# Fail the GitHub Actions build immediately if ReActor/OpenCV is still missing
+# a native runtime library; do not discover it after pulling 30 GB on Salad.
+RUN python -c "import cv2; print('OpenCV loaded:', cv2.__version__)"
 
 RUN mkdir -p /opt/ComfyUI/user/default/workflows/qwen2511 && \
     cp -R /opt/qvr/workflows/* /opt/ComfyUI/user/default/workflows/qwen2511/
