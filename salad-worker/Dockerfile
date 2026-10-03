@@ -16,6 +16,8 @@ ARG SALAD_JOB_QUEUE_WORKER_VERSION=0.7.0
 # the two original safetensors files locally before starting comfyui-api.
 # OpenCV/ReActor requires libGL.so.1 (libgl1) and libgthread-2.0.so.0
 # (libglib2.0-0t64 on the Ubuntu 24.04 Noble base image).
+# Triton compiles CUDA helpers while processing actual prompts: KEEP both
+# gcc/build-essential and Python 3.12 development headers in the final image.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential python3-dev git curl ca-certificates libgl1 libglib2.0-0t64 && \
@@ -38,9 +40,12 @@ RUN rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-ReActor && \
     python -m pip install --no-cache-dir "setuptools==81.0.0" "onnxruntime-gpu>=1.27,<2" && \
     rm -rf /root/.cache/pip
 
-# Fail GitHub Actions early if native OpenCV libraries are missing; do not
-# discover errors after downloading the large Qwen model in Salad.
-RUN python -c "import cv2; print('OpenCV loaded:', cv2.__version__)"
+# Fail GitHub Actions early if native OpenCV libraries or runtime compiler
+# headers are missing; do not discover errors after downloading large models.
+RUN python -c "import cv2; print('OpenCV loaded:', cv2.__version__)" && \
+    test -f /usr/include/python3.12/Python.h && \
+    command -v gcc && \
+    python -c "import sys; assert sys.version_info[:2] == (3, 12); print('Python 3.12 headers and gcc verified')"
 
 RUN mkdir -p /opt/ComfyUI/user/default/workflows/qwen2511 && \
     cp -R /opt/qvr/workflows/* /opt/ComfyUI/user/default/workflows/qwen2511/
@@ -78,7 +83,10 @@ COPY manifest.fp8-full.yaml /opt/qvr-salad/manifest.fp8-full.yaml
 COPY --chmod=755 start.sh /opt/qvr-salad/start.sh
 COPY --chmod=755 verify_runtime.sh /opt/qvr-salad/verify_runtime.sh
 
-RUN apt-get purge -y --auto-remove build-essential python3-dev && \
+# Keep the Python headers and compiler: Triton needs them at prompt time.
+# Remove only temporary build/download files, not runtime dependencies.
+RUN test -f /usr/include/python3.12/Python.h && \
+    command -v gcc && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/*
 
