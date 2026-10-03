@@ -10,7 +10,7 @@ import re
 import httpx
 
 from .config import settings
-from . import db, storage, salad, salad_control, job_lifecycle
+from . import db, storage, salad, salad_control, job_lifecycle, settings_store
 from .template import render_template
 
 app = FastAPI(title=settings.app_name, version="1.2.0")
@@ -34,6 +34,7 @@ def stale_minutes():
 @app.on_event("startup")
 def startup():
     db.init_db()
+    settings_store.seed()  # One-time migration of the original PRIVATE .env.
 
 
 def check_internal_token(x_internal_token: str | None):
@@ -77,6 +78,13 @@ class JobIn(BaseModel):
 
 class RetryIn(BaseModel):
     allow_duplicate: bool = False
+
+
+class SaladSettingsIn(BaseModel):
+    # Image can be a versioned GHCR image; never accept arbitrary shell syntax.
+    image: str = Field(min_length=10, max_length=255, pattern=r"^ghcr\.io/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$")
+    group_name: str = Field(min_length=2, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+    display_name: str = Field(min_length=2, max_length=63, pattern=r"^[A-Za-z0-9][A-Za-z0-9 ,.-]*$")
 
 
 @app.get("/health")
@@ -304,10 +312,50 @@ def images(local_id: str):
         raise HTTPException(502, f"Cannot list output images: {type(exc).__name__}")
 
 
+@app.get("/api/salad/settings")
+def get_salad_settings(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    return settings_store.snapshot()
+
+
+@app.put("/api/salad/settings")
+def update_salad_settings(body: SaladSettingsIn,
+                          x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    return settings_store.save_draft(body.model_dump())
+
+
+@app.post("/api/salad/settings/deploy")
+def deploy_salad_settings(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.deploy_draft()
+    except Exception as exc:
+        raise salad_error(exc)
+
+
 @app.get("/api/salad/instances")
 def salad_instances():
     try:
         return salad_control.status()
+    except Exception as exc:
+        raise salad_error(exc)
+
+
+@app.post("/api/salad/keep-warm")
+def enable_keep_warm(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.set_keep_warm(True)
+    except Exception as exc:
+        raise salad_error(exc)
+
+
+@app.post("/api/salad/auto-scale")
+def enable_auto_scale(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.set_keep_warm(False)
     except Exception as exc:
         raise salad_error(exc)
 

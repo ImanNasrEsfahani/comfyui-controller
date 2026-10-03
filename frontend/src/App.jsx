@@ -191,6 +191,11 @@ export default function App() {
   const [gpuName, setGpuName] = useState("");
   const [adminConfigured, setAdminConfigured] = useState(false);
   const [adminToken, setAdminToken] = useState("");
+  const [activePage, setActivePage] = useState("editor");
+  const [deploymentSettings, setDeploymentSettings] = useState(null);
+  const [settingsDraft, setSettingsDraft] = useState({ image: "", group_name: "", display_name: "" });
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState("");
   const [instanceInfo, setInstanceInfo] = useState(null);
   const [instanceError, setInstanceError] = useState("");
   const [groupBusy, setGroupBusy] = useState(false);
@@ -285,6 +290,60 @@ export default function App() {
     setAdminToken(value);
   }
 
+  async function refreshDeploymentSettings() {
+    setSettingsBusy(true);
+    setSettingsMessage("");
+    try {
+      const result = await api("/salad/settings");
+      setDeploymentSettings(result);
+      setSettingsDraft({ ...result.draft });
+    } catch (err) {
+      setSettingsMessage(err.message);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  function showSettings() {
+    setActivePage("settings");
+    if (sessionToken) refreshDeploymentSettings();
+  }
+
+  async function saveDeploymentDraft() {
+    setSettingsBusy(true);
+    setSettingsMessage("");
+    try {
+      const result = await api("/salad/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settingsDraft)
+      });
+      setDeploymentSettings(result);
+      setSettingsDraft({ ...result.draft });
+      setSettingsMessage("Draft saved in SQLite. The active group is unchanged. Press Deploy when the GPU is idle.");
+    } catch (err) {
+      setSettingsMessage(err.message);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function deployDeploymentDraft() {
+    if (!window.confirm("Deploy the saved configuration? GPU must have 0 replicas and no outstanding jobs. A new group may be created, but old groups are never deleted.")) return;
+    setSettingsBusy(true);
+    setSettingsMessage("Waiting for Salad to deploy the saved configuration...");
+    try {
+      const result = await api("/salad/settings/deploy", { method: "POST" });
+      setDeploymentSettings(result);
+      setSettingsDraft({ ...result.draft });
+      setSettingsMessage(result.message || "Deployment completed.");
+      await refreshInstances();
+    } catch (err) {
+      setSettingsMessage(err.message);
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   async function groupAction(action) {
     if (!adminConfigured || !adminToken) {
       setMessage("Set an admin token in the private .env and enter it above.");
@@ -293,7 +352,11 @@ export default function App() {
     const prompts = {
       stop: "STOP the entire Container Group? The only worker and any running task may be interrupted. Pending remote jobs remain in Salad.",
       start: "Start the Container Group? After it settles you can request one replica.",
-      replica: "Request one billable GPU replica now?"
+      replica: "Request one billable GPU replica now?",
+      "keep-warm": "Keep one billable RTX 5090 available even when the queue is empty? " +
+        "This may cause a Salad configuration update/reallocation. Enable before starting a job.",
+      "auto-scale": "Return to automatic scale-to-zero? Salad will release the GPU once idle; " +
+        "verify the instance count before assuming billing has stopped."
     };
     if (!window.confirm(prompts[action])) return;
     setGroupBusy(true);
@@ -580,7 +643,14 @@ export default function App() {
       </header>
 
       {message && <div className="notice" role="status">{message}</div>}
+      <nav className="page-tabs" aria-label="Controller pages">
+        <button type="button" className={activePage === "editor" ? "tab-active" : "ghost"}
+          onClick={() => setActivePage("editor")}>Editor</button>
+        <button type="button" className={activePage === "settings" ? "tab-active" : "ghost"}
+          onClick={showSettings}>Settings</button>
+      </nav>
 
+      {activePage === "editor" ? (<>
       <section className="card instance-card" aria-label="Salad GPU worker status">
         <div className="row instance-heading">
           <div>
@@ -597,6 +667,7 @@ export default function App() {
               <span>Requested: {instanceInfo.replicas ?? 0}</span>
               <span>Group: <strong>{instanceInfo.status || "unknown"}</strong></span>
               <span>Autoscaler: {instanceInfo.autoscaler_enabled ? "enabled" : "off"}</span>
+              <span>Mode: <strong>{instanceInfo.keep_warm ? "Keep Warm · 1 GPU" : "Auto · scale to zero"}</strong></span>
               {instanceInfo.pending_change && <span>Change pending</span>}
             </div>
             <div className="instance-list">
@@ -610,7 +681,8 @@ export default function App() {
                       {instance.pulling_progress != null ? ` · Pulling ${instance.pulling_progress}%` : ""}
                     </div>
                   </div>
-                  <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                  <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
+                    title={instanceInfo.keep_warm ? "Return to Auto before stopping the GPU" : "Stop the whole Container Group"}
                     onClick={() => groupAction("stop")}>Stop worker</button>
                 </div>
               ))}
@@ -627,10 +699,28 @@ export default function App() {
                       onClick={() => groupAction("replica")}>Start 1 GPU replica</button>
                   )}
                   {Number(instanceInfo.replicas || 0) > 0 && !(instanceInfo.instances || []).length && (
-                    <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                    <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
                       onClick={() => groupAction("stop")}>Stop requested worker</button>
                   )}
                 </>
+              )}
+            </div>
+            <div className="warm-controls">
+              <div>
+                <strong>{instanceInfo.keep_warm ? "Keep Warm is ON" : "Auto scale-to-zero is ON"}</strong>
+                <p className="hint">
+                  {instanceInfo.keep_warm
+                    ? "Salad keeps a minimum of 1 billable GPU while this mode is enabled. Return to Auto when editing is finished."
+                    : "Enable Keep Warm BEFORE a batch of edits so the GPU is not released between jobs."}
+                </p>
+                {instanceInfo.pending_change && <p className="hint">Salad is applying the change. Refresh to confirm before starting another action.</p>}
+              </div>
+              {instanceInfo.keep_warm ? (
+                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                  onClick={() => groupAction("auto-scale")}>Return to Auto</button>
+              ) : (
+                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.status === "stopped"}
+                  onClick={() => groupAction("keep-warm")}>Keep Warm · 1 GPU</button>
               )}
             </div>
           </>
@@ -784,6 +874,58 @@ export default function App() {
           ))}
         </div>
       </section>
+      </>) : (
+        <section className="card settings-card">
+          <h2>Salad deployment settings</h2>
+          <p className="hint">These three non-secret values live in the controller SQLite database, not .env. Saving a draft never changes the active GPU group.</p>
+          <div className="admin-auth">
+            <label htmlFor="settings-admin-token">Admin token (browser tab only)</label>
+            <input type="password" id="settings-admin-token" autoComplete="off" value={adminToken}
+              onChange={e => changeAdminToken(e.target.value)} placeholder="APP_INTERNAL_TOKEN" />
+          </div>
+          <div className="button-row">
+            <button type="button" className="ghost" disabled={settingsBusy || !adminToken}
+              onClick={refreshDeploymentSettings}>Load / refresh settings</button>
+          </div>
+          {settingsMessage && <p className="notice" role="status">{settingsMessage}</p>}
+          {deploymentSettings && (
+            <>
+              <div className="settings-current">
+                <h3>Currently active (live)</h3>
+                <p><strong>Image:</strong> <code>{deploymentSettings.active.image}</code></p>
+                <p><strong>Group:</strong> <code>{deploymentSettings.active.group_name}</code></p>
+                <p><strong>Display name:</strong> {deploymentSettings.active.display_name}</p>
+              </div>
+              <div className="settings-fields">
+                <label htmlFor="settings-image">Docker image</label>
+                <input id="settings-image" type="text" value={settingsDraft.image}
+                  onChange={e => setSettingsDraft(prev => ({ ...prev, image: e.target.value }))}
+                  placeholder="ghcr.io/owner/image:version" />
+                <label htmlFor="settings-group">Container Group name</label>
+                <input id="settings-group" type="text" value={settingsDraft.group_name}
+                  onChange={e => setSettingsDraft(prev => ({ ...prev, group_name: e.target.value }))}
+                  placeholder="qwen-comfyui-5090-v4" />
+                <label htmlFor="settings-label">Container Group display name</label>
+                <input id="settings-label" type="text" value={settingsDraft.display_name}
+                  onChange={e => setSettingsDraft(prev => ({ ...prev, display_name: e.target.value }))}
+                  placeholder="Qwen-ComfyUI-RTX-5090-V4" />
+              </div>
+              <p className="hint">If Salad reserves a deleted group name, Deploy automatically chooses a unique suffix. Existing groups are preserved, never silently deleted.</p>
+              {deploymentSettings.provisioning && (
+                <p className="hint">Pending provisioning: {deploymentSettings.provisioning.group_name}</p>
+              )}
+              <div className="button-row">
+                <button type="button" disabled={settingsBusy || !adminToken}
+                  onClick={saveDeploymentDraft}>Save draft to DB</button>
+                <button type="button" className="primary"
+                  disabled={settingsBusy || !adminToken || !deploymentSettings.has_changes}
+                  onClick={deployDeploymentDraft}>Deploy saved draft</button>
+              </div>
+              <p className="hint">Deploy is refused if the active GPU/Keep Warm is on, changes are pending, or a local job is still active. Wait for the old group to reach 0 replicas first. Deploy may take up to 45 seconds.</p>
+            </>
+          )}
+        </section>
+      )}
     </main>
   );
 }

@@ -49,6 +49,10 @@ def init_db():
         );
         """)
 
+        c.execute("""CREATE TABLE IF NOT EXISTS controller_settings (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL
+        )""")
+
         cols = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
 
         if "priority" not in cols:

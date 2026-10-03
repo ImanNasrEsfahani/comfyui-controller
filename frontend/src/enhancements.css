@@ -23,3 +23,24 @@ button.danger:hover { background: #402020; }
 .output-thumbnails img { width: 96px; height: 96px; border-radius: 9px; border: 1px solid #303b4c; background: #070a0e; object-fit: cover; }
 .output-thumbnails a:hover img { border-color: #a9c5ff; }
 @media (max-width: 650px) { .instance-heading { flex-direction: column; } .instance-item { align-items: flex-start; flex-direction: column; } .output-thumbnails img { width: 80px; height: 80px; } }
+
+/* One-GPU editing session controls. */
+.warm-controls { display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 14px; border: 1px solid #3b485d; border-radius: 12px;
+  padding: 14px; margin-top: 14px; background: #111a27; }
+.warm-controls > div { flex: 1 1 250px; }
+.warm-controls strong { color: #dce9ff; }
+.warm-controls .hint { margin: 6px 0 0; font-size: 12px; }
+.warm-controls button { margin: 0; white-space: nowrap; }
+
+/* Deployment Settings screen */
+.page-tabs { display: flex; gap: 9px; margin: 16px 0; }
+.page-tabs button { margin: 0; }
+.page-tabs .tab-active { color: #e8f1ff; border-color: #548fc7; background: #192b42; }
+.settings-card { max-width: 960px; }
+.settings-current { overflow-wrap: anywhere; border: 1px solid #293747; border-radius: 12px; padding: 13px; margin: 14px 0; }
+.settings-current h3 { margin: 0 0 10px; }
+.settings-current p { font-size: 13px; margin: 7px 0; }
+.settings-fields { display: grid; gap: 10px; margin: 18px 0; }
+.settings-fields input { width: 100%; min-width: 0; }
+.settings-card .button-row { flex-wrap: wrap; }
