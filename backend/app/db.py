@@ -46,7 +46,10 @@ def init_db():
         cols = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
 
         if "priority" not in cols:
-            c.execute("ALTER TABLE jobs ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'")
+            # Priority for historic rows is read from the currently configured .env.
+            c.execute(
+                f"ALTER TABLE jobs ADD COLUMN priority TEXT NOT NULL DEFAULT '{settings.salad_priority}'"
+            )
 
         if "salad_queue" not in cols:
             c.execute("ALTER TABLE jobs ADD COLUMN salad_queue TEXT")
@@ -106,7 +109,8 @@ def delete_workflow(workflow_id):
         c.execute("DELETE FROM workflows WHERE id=?", (workflow_id,))
 
 
-def create_job(local_id, workflow_id, request_payload, *, priority="medium", salad_queue=None):
+def create_job(local_id, workflow_id, request_payload, *, priority=None, salad_queue=None):
+    priority = priority or settings.salad_priority
     now = utcnow()
     with connect() as c:
         c.execute(

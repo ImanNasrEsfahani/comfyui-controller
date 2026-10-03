@@ -21,13 +21,6 @@ const blankWorkflow = JSON.stringify({
   }
 }, null, 2);
 
-const PRIORITY_OPTIONS = [
-  { value: "high", label: "High", help: "Highest availability, highest cost" },
-  { value: "medium", label: "Medium — Default", help: "Balanced availability and cost" },
-  { value: "low", label: "Low", help: "Lower cost, more interruptions" },
-  { value: "batch", label: "Batch / Lowest", help: "Lowest cost; may wait for capacity" }
-];
-
 const TERMINAL_STATES = new Set([
   "succeeded",
   "failed",
@@ -187,7 +180,8 @@ export default function App() {
   const [workflowName, setWorkflowName] = useState("");
   const [workflowJson, setWorkflowJson] = useState(blankWorkflow);
   const [selected, setSelected] = useState("");
-  const [priority, setPriority] = useState("medium");
+  const [priority, setPriority] = useState("");
+  const [gpuName, setGpuName] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploadingKey, setUploadingKey] = useState("");
@@ -221,12 +215,18 @@ export default function App() {
     [workflows, selected]
   );
 
-  const priorityHelp = useMemo(
-    () => PRIORITY_OPTIONS.find(p => p.value === priority)?.help || "",
-    [priority]
-  );
-
   useEffect(() => {
+    fetch("/health")
+      .then(async response => {
+        if (!response.ok) throw new Error(`Health check returned ${response.status}`);
+        return response.json();
+      })
+      .then(data => {
+        if (!data.default_priority) throw new Error("Backend did not return a priority");
+        setPriority(data.default_priority);
+        setGpuName(data.gpu_name || "");
+      })
+      .catch(e => setMessage(`Unable to load GPU settings: ${e.message}`));
     refreshWorkflows().catch(e => setMessage(e.message));
     refreshJobs().catch(e => setMessage(e.message));
 
@@ -548,14 +548,10 @@ export default function App() {
             </details>
           )}
 
-          <label>GPU priority for this run</label>
-          <select value={priority} onChange={e => setPriority(e.target.value)}>
-            {PRIORITY_OPTIONS.map(item => (
-              <option key={item.value} value={item.value}>{item.label}</option>
-            ))}
-          </select>
-
-          <p className="hint">{priorityHelp}</p>
+          <label>GPU configuration (from server .env)</label>
+          <p className="hint">
+            {priority ? `${priority}${gpuName ? ` · ${gpuName}` : ""}` : "Loading server GPU settings..."}
+          </p>
 
           {missingImages.length > 0 && selected && (
             <p className="validation">
@@ -565,7 +561,7 @@ export default function App() {
 
           <button
             className="primary"
-            disabled={busy || Boolean(uploadingKey) || !selected || missingImages.length > 0}
+            disabled={busy || Boolean(uploadingKey) || !selected || missingImages.length > 0 || !priority}
             onClick={run}
           >
             Run on Salad GPU
@@ -583,7 +579,7 @@ export default function App() {
           {jobs.length === 0 && <p className="muted">No jobs yet.</p>}
 
           {jobs.map(j => (
-            <Job key={j.id} job={j} />
+            <Job key={j.id} job={j} fallbackPriority={priority} />
           ))}
         </div>
       </section>
@@ -709,7 +705,7 @@ function VariableField({
   );
 }
 
-function Job({ job }) {
+function Job({ job, fallbackPriority }) {
   const images = collectImages(job.output);
 
   return (
@@ -717,7 +713,7 @@ function Job({ job }) {
       <div>
         <strong>{job.workflow_id}</strong>
         <div className="mono">{job.id}</div>
-        <div className="hint">Priority: {job.priority || "medium"}</div>
+        <div className="hint">Priority: {job.priority || fallbackPriority || ""}</div>
       </div>
 
       <span className={`pill ${job.state}`}>{job.state}</span>
