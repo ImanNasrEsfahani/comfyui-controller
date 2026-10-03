@@ -3,7 +3,9 @@
 
 Every configurable deployment value is required from the root .env.
 Default run is read-only; --apply creates/reconciles ONLY the named resources.
-Never deletes old resources, auto-renames groups, or starts a GPU directly.
+Use --apply --bootstrap to request an initial replica explicitly, including
+for an existing scale-to-zero group. Plain --apply never wakes an idle group.
+Never deletes old resources, auto-renames groups, or changes the Queue name.
 """
 import argparse
 import json
@@ -60,6 +62,7 @@ RESOURCE_SPEC = {
     "storage_amount": integer("SALAD_STORAGE_GB", 1) * 1024 ** 3,
 }
 INITIAL_REPLICAS = integer("SALAD_INITIAL_REPLICAS", 0)
+BOOTSTRAP_REPLICAS = integer("SALAD_BOOTSTRAP_REPLICAS", 1)
 MIN_REPLICAS = integer("SALAD_MIN_REPLICAS", 0)
 MAX_REPLICAS = integer("SALAD_MAX_REPLICAS", 1)
 RESTART_POLICY = required("SALAD_RESTART_POLICY")
@@ -73,7 +76,9 @@ def validate_configuration():
     if PRIORITY not in ("high", "medium", "low", "batch"):
         raise SystemExit("SALAD_PRIORITY must be a Salad priority: high, medium, low, batch")
     if INITIAL_REPLICAS != 0 or MIN_REPLICAS != 0 or MAX_REPLICAS != 1:
-        raise SystemExit("Single-group, scale-to-zero deployment requires replicas: 0 / 0 / 1")
+        raise SystemExit("Single-group, scale-to-zero deployment requires initial/min/max: 0 / 0 / 1")
+    if BOOTSTRAP_REPLICAS != 1:
+        raise SystemExit("Single-GPU bootstrap requires SALAD_BOOTSTRAP_REPLICAS=1")
     if not (BASE.startswith("https://") or BASE.startswith("http://")):
         raise SystemExit("SALAD_API_BASE_URL must be an HTTP(S) URL")
 
@@ -192,7 +197,9 @@ def queue_payload():
     return {"name": QUEUE_NAME, "display_name": QUEUE_DISPLAY_NAME}
 
 
-def group_payload(gpu_id):
+def group_payload(gpu_id, replicas=None):
+    if replicas is None:
+        replicas = INITIAL_REPLICAS
     return {
         "name": GROUP_NAME,
         "display_name": GROUP_DISPLAY_NAME,
@@ -202,7 +209,7 @@ def group_payload(gpu_id):
             "environment_variables": environment_payload(),
             "priority": PRIORITY,
         },
-        "replicas": INITIAL_REPLICAS,
+        "replicas": replicas,
         "restart_policy": RESTART_POLICY,
         "autostart_policy": AUTOSTART_POLICY,
         "queue_connection": {
@@ -247,8 +254,14 @@ def ensure_queue():
     return ensure_resource("Queue", get_queue, f"{project_path()}/queues", queue_payload())
 
 
-def ensure_group(gpu_id):
-    return ensure_resource("Container Group", get_group, f"{project_path()}/containers", group_payload(gpu_id))
+def ensure_group(gpu_id, *, bootstrap=False):
+    # For a missing group, an explicitly requested bootstrap starts at one.
+    # For an existing group, ensure_resource does not touch the replica count.
+    target = BOOTSTRAP_REPLICAS if bootstrap else INITIAL_REPLICAS
+    return ensure_resource(
+        "Container Group", get_group, f"{project_path()}/containers",
+        group_payload(gpu_id, replicas=target),
+    )
 
 
 def wait_for_settle():
@@ -344,7 +357,49 @@ def patch_group(gpu_id):
             time.sleep(SETTLE_POLL_SECONDS)
 
 
-def report(gpu_id, apply):
+def bootstrap_group(group):
+    """Explicit, idempotent initial scale-up. Never downscale an active worker.
+
+    This is deliberately NOT run by plain --apply. A manual replica may incur
+    Salad charges. It does not promise that the queue autoscaler can recover
+    from zero in later runs; that behavior must be tested separately.
+    """
+    if group.get("pending_change"):
+        raise RuntimeError("Group has a pending Salad change; bootstrap aborted")
+    current = group.get("replicas") or 0
+    if current > BOOTSTRAP_REPLICAS:
+        raise RuntimeError("Existing replicas exceed bootstrap target; refusing to downscale")
+    if current < BOOTSTRAP_REPLICAS:
+        print(f"Bootstrapping {GROUP_NAME}: {current} -> {BOOTSTRAP_REPLICAS} replica(s)", flush=True)
+        request(
+            "PATCH", group_path(), {"replicas": BOOTSTRAP_REPLICAS},
+            content_type="application/merge-patch+json",
+        )
+        group = wait_for_settle()
+        if group.get("replicas") != BOOTSTRAP_REPLICAS:
+            raise RuntimeError("Bootstrap PATCH returned but replica target was not confirmed")
+    else:
+        print(f"Bootstrap: {BOOTSTRAP_REPLICAS} replica(s) already requested; no PATCH", flush=True)
+
+    # Changing replicas on a stopped group does not necessarily start it.
+    if (group.get("current_state") or {}).get("status") == "stopped":
+        print(f"Starting stopped group {GROUP_NAME}", flush=True)
+        request("POST", group_path() + "/start")
+        deadline = time.monotonic() + SETTLE_TIMEOUT
+        while True:
+            group = get_group()
+            status = (group.get("current_state") or {}).get("status") if group else None
+            if group is not None and not group.get("pending_change") and status != "stopped":
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Start accepted but group has not left stopped state")
+            time.sleep(SETTLE_POLL_SECONDS)
+    print(f"Bootstrap verified: requested replicas={BOOTSTRAP_REPLICAS}", flush=True)
+
+
+def report(gpu_id, apply, bootstrap=False):
+    if bootstrap and not apply:
+        raise RuntimeError("--bootstrap requires --apply")
     queue = get_queue()
     group = get_group()
     print(f"Organization/Project: {ORG}/{PROJECT}")
@@ -353,6 +408,7 @@ def report(gpu_id, apply):
     print(f"GPU: {GPU_NAME}; CPU: {RESOURCE_SPEC['cpu']}; RAM: {RESOURCE_SPEC['memory']} MB")
     print(f"Shared memory: {RESOURCE_SPEC['shm_size']} MB; Disk: {RESOURCE_SPEC['storage_amount']} bytes")
     print(f"Priority: {PRIORITY}; initial/min/max replicas: {INITIAL_REPLICAS}/{MIN_REPLICAS}/{MAX_REPLICAS}")
+    print(f"Bootstrap replicas: {BOOTSTRAP_REPLICAS}; requested: {bootstrap}")
     print(f"Image: {IMAGE}", flush=True)
     if group is not None:
         assert_queue_connection(group)
@@ -364,7 +420,7 @@ def report(gpu_id, apply):
         print("READ-ONLY CHECK: use --apply to create/reconcile named resources.")
         return
     ensure_queue()
-    group = ensure_group(gpu_id)
+    group = ensure_group(gpu_id, bootstrap=bootstrap)
     group = wait_for_settle()
     assert_queue_connection(group)
     drift = config_drift(group, gpu_id)
@@ -380,6 +436,8 @@ def report(gpu_id, apply):
         raise RuntimeError("Post-deploy configuration mismatch: " + ", ".join(remaining))
     if get_queue() is None:
         raise RuntimeError("Queue missing after deployment")
+    if bootstrap:
+        bootstrap_group(group)
     print("SUCCESS: configured Queue and Container Group verified; no duplicate created.")
     print("Other groups/queues were NOT deleted.")
 
@@ -387,13 +445,19 @@ def report(gpu_id, apply):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Create/reconcile only the configured Queue/Group")
+    parser.add_argument(
+        "--bootstrap", action="store_true",
+        help="With --apply, explicitly request one replica (may incur GPU charges)",
+    )
     parser.add_argument("--priority", help="Compatibility only; must match SALAD_PRIORITY in .env")
     args = parser.parse_args()
     validate_configuration()
+    if args.bootstrap and not args.apply:
+        parser.error("--bootstrap requires --apply")
     if args.priority is not None and args.priority != PRIORITY:
         parser.error("--priority must match SALAD_PRIORITY in .env")
     gpu_id = select_gpu()
-    report(gpu_id, args.apply)
+    report(gpu_id, args.apply, bootstrap=args.bootstrap)
 
 
 if __name__ == "__main__":
