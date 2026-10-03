@@ -1,9 +1,13 @@
+import "./enhancements.css";
 import React, { useEffect, useMemo, useState } from "react";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
+let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
 
 async function api(path, options = {}) {
-  const r = await fetch(`${API}${path}`, options);
+  const headers = new Headers(options.headers || {});
+  if (sessionToken) headers.set("X-Internal-Token", sessionToken);
+  const r = await fetch(`${API}${path}`, { ...options, headers });
   if (!r.ok) {
     const body = await r.text();
     throw new Error(`${r.status}: ${body}`);
@@ -27,6 +31,9 @@ const TERMINAL_STATES = new Set([
   "cancelled",
   "submit_failed"
 ]);
+
+const RETRYABLE_STATES = new Set(["failed", "cancelled", "submit_failed", "stalled"]);
+
 
 function extractPlaceholders(value) {
   const found = new Set();
@@ -182,6 +189,12 @@ export default function App() {
   const [selected, setSelected] = useState("");
   const [priority, setPriority] = useState("");
   const [gpuName, setGpuName] = useState("");
+  const [adminConfigured, setAdminConfigured] = useState(false);
+  const [adminToken, setAdminToken] = useState("");
+  const [instanceInfo, setInstanceInfo] = useState(null);
+  const [instanceError, setInstanceError] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [jobBusyId, setJobBusyId] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploadingKey, setUploadingKey] = useState("");
@@ -225,16 +238,23 @@ export default function App() {
         if (!data.default_priority) throw new Error("Backend did not return a priority");
         setPriority(data.default_priority);
         setGpuName(data.gpu_name || "");
+        setAdminConfigured(Boolean(data.admin_configured));
       })
       .catch(e => setMessage(`Unable to load GPU settings: ${e.message}`));
     refreshWorkflows().catch(e => setMessage(e.message));
     refreshJobs().catch(e => setMessage(e.message));
+    refreshInstances().catch(() => {});
 
-    const t = setInterval(() => {
+    const jobsTimer = setInterval(() => {
       refreshJobs().catch(() => {});
     }, 6000);
-
-    return () => clearInterval(t);
+    const instanceTimer = setInterval(() => {
+      refreshInstances().catch(() => {});
+    }, 10000);
+    return () => {
+      clearInterval(jobsTimer);
+      clearInterval(instanceTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -250,15 +270,119 @@ export default function App() {
     setVariablesDraft(JSON.stringify(variables, null, 2));
   }, [variables, selected]);
 
+  async function refreshInstances() {
+    try {
+      const data = await api("/salad/instances");
+      setInstanceInfo(data);
+      setInstanceError("");
+    } catch (e) {
+      setInstanceError(e.message);
+    }
+  }
+
+  function changeAdminToken(value) {
+    sessionToken = value;
+    setAdminToken(value);
+  }
+
+  async function groupAction(action) {
+    if (!adminConfigured || !adminToken) {
+      setMessage("Set an admin token in the private .env and enter it above.");
+      return;
+    }
+    const prompts = {
+      stop: "STOP the entire Container Group? The only worker and any running task may be interrupted. Pending remote jobs remain in Salad.",
+      start: "Start the Container Group? After it settles you can request one replica.",
+      replica: "Request one billable GPU replica now?"
+    };
+    if (!window.confirm(prompts[action])) return;
+    setGroupBusy(true);
+    try {
+      const response = await api(`/salad/${action}`, { method: "POST" });
+      setMessage(response.message || `Group action ${action} accepted.`);
+      await refreshInstances();
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setGroupBusy(false);
+    }
+  }
+
+  async function refreshOneJob(job) {
+    setJobBusyId(job.id);
+    try {
+      const updated = await api(`/jobs/${encodeURIComponent(job.id)}`);
+      setJobs(prev => prev.map(item => item.id === job.id ? updated : item));
+      setMessage(`Status refreshed: ${updated.state}`);
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setJobBusyId("");
+    }
+  }
+
+  async function hideJob(job) {
+    const remoteWarning = TERMINAL_STATES.has(job.state)
+      ? "Hide this job from the controller? This does not remove files from R2."
+      : "Hide this job locally? Its REMOTE Salad job will NOT be cancelled and may still run and incur costs.";
+    if (!window.confirm(remoteWarning)) return;
+    setJobBusyId(job.id);
+    try {
+      await api(`/jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+      setJobs(previous => previous.filter(item => item.id !== job.id));
+      setMessage("Job hidden locally. Any remote Salad job remains unchanged.");
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setJobBusyId("");
+    }
+  }
+
+  async function editJob(job) {
+    setJobBusyId(job.id);
+    try {
+      const draft = await api(`/jobs/${encodeURIComponent(job.id)}/draft`);
+      await loadWorkflow(draft.workflow_id, draft.variables);
+      setMessage(draft.warning || "Job inputs restored. Edit the prompt and run when ready.");
+      document.getElementById("inputs-run")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setJobBusyId("");
+    }
+  }
+
+  async function retryJob(job) {
+    const mayStillRun = job.state === "stalled" || job.state === "submit_failed";
+    const warning = mayStillRun
+      ? "The original remote job may STILL EXECUTE. Retrying creates a NEW job and could cost twice. Continue?"
+      : "Submit a NEW billable attempt with the previously saved inputs?";
+    if (!window.confirm(warning)) return;
+    setJobBusyId(job.id);
+    try {
+      const output = await api(`/jobs/${encodeURIComponent(job.id)}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow_duplicate: mayStillRun })
+      });
+      setMessage(`New attempt submitted: ${output.id}`);
+      await refreshJobs();
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setJobBusyId("");
+    }
+  }
+
   async function refreshWorkflows() {
     setWorkflows(await api("/workflows"));
   }
 
-  async function refreshJobs() {
+  async function refreshJobs(allPending = false) {
     const list = await api("/jobs?limit=30");
     const pending = list
       .filter(job => !TERMINAL_STATES.has(job.state))
-      .slice(0, 10);
+      .slice(0, allPending === true ? 30 : 10);
 
     if (pending.length === 0) {
       setJobs(list);
@@ -322,7 +446,7 @@ export default function App() {
     }
   }
 
-  async function loadWorkflow(id) {
+  async function loadWorkflow(id, restoredVariables = null) {
     setSelected(id);
     setUploadedNames({});
     if (!id) return;
@@ -331,13 +455,24 @@ export default function App() {
       const w = await api(`/workflows/${encodeURIComponent(id)}`);
       const json = JSON.stringify(w.api_prompt, null, 2);
       const keys = extractPlaceholders(w.api_prompt);
-      const nextVariables = loadLocalVariables(id, keys);
+      const nextVariables = restoredVariables === null
+        ? loadLocalVariables(id, keys)
+        : normalizeVariables(keys, restoredVariables);
 
       setWorkflowId(w.id);
       setWorkflowName(w.name);
       setWorkflowJson(json);
       setVariables(nextVariables);
       setVariablesDraft(JSON.stringify(nextVariables, null, 2));
+      if (restoredVariables !== null) {
+        const names = {};
+        keys.filter(key => /^input\.image_\d+$/.test(key)).forEach(key => {
+          if (nextVariables[key]) {
+            names[key] = decodeURIComponent(String(nextVariables[key]).split("/").pop() || "Saved image");
+          }
+        });
+        setUploadedNames(names);
+      }
     } catch (e) {
       setMessage(e.message);
     }
@@ -354,7 +489,8 @@ export default function App() {
       form.append("file", file);
       const out = await api("/uploads", { method: "POST", body: form });
 
-      updateVariable(key, out.url);
+      // A stable URI survives R2 signature expiry; the backend signs it for each run.
+      updateVariable(key, out.s3_uri);
       setUploadedNames(prev => ({ ...prev, [key]: file.name }));
       setMessage(`${friendlyLabel(key)} uploaded successfully.`);
     } catch (e) {
@@ -443,7 +579,69 @@ export default function App() {
         </div>
       </header>
 
-      {message && <div className="notice">{message}</div>}
+      {message && <div className="notice" role="status">{message}</div>}
+
+      <section className="card instance-card" aria-label="Salad GPU worker status">
+        <div className="row instance-heading">
+          <div>
+            <h2>Salad GPU instances</h2>
+            <p className="hint">Live status updates every 10 seconds. Stop affects the entire single-worker Container Group.</p>
+          </div>
+          <button className="ghost" onClick={() => refreshInstances()}>Refresh instances</button>
+        </div>
+        {instanceError && <p className="validation">Instance status unavailable: {instanceError}</p>}
+        {instanceInfo ? (
+          <>
+            <div className="instance-summary">
+              <span><strong>{instanceInfo.instances?.length ?? 0}</strong> instances</span>
+              <span>Requested: {instanceInfo.replicas ?? 0}</span>
+              <span>Group: <strong>{instanceInfo.status || "unknown"}</strong></span>
+              <span>Autoscaler: {instanceInfo.autoscaler_enabled ? "enabled" : "off"}</span>
+              {instanceInfo.pending_change && <span>Change pending</span>}
+            </div>
+            <div className="instance-list">
+              {(instanceInfo.instances || []).map(instance => (
+                <div className="instance-item" key={instance.id}>
+                  <div>
+                    <strong>{instance.state || "unknown"}</strong>
+                    <div className="mono">{instance.id}</div>
+                    <div className="hint">
+                      Ready: {instance.ready ? "yes" : "no"}
+                      {instance.pulling_progress != null ? ` · Pulling ${instance.pulling_progress}%` : ""}
+                    </div>
+                  </div>
+                  <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                    onClick={() => groupAction("stop")}>Stop worker</button>
+                </div>
+              ))}
+              {!(instanceInfo.instances || []).length && <p className="hint">No allocated instances.</p>}
+            </div>
+            <div className="button-row">
+              {instanceInfo.status === "stopped" ? (
+                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                  onClick={() => groupAction("start")}>Start group</button>
+              ) : (
+                <>
+                  {Number(instanceInfo.replicas || 0) === 0 && (
+                    <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                      onClick={() => groupAction("replica")}>Start 1 GPU replica</button>
+                  )}
+                  {Number(instanceInfo.replicas || 0) > 0 && !(instanceInfo.instances || []).length && (
+                    <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                      onClick={() => groupAction("stop")}>Stop requested worker</button>
+                  )}
+                </>
+              )}
+            </div>
+          </>
+        ) : !instanceError && <p className="muted">Loading Salad instance status…</p>}
+        <div className="admin-auth">
+          <label htmlFor="admin-token">Admin token (kept only in this browser tab)</label>
+          <input id="admin-token" type="password" autoComplete="off" value={adminToken}
+            onChange={e => changeAdminToken(e.target.value)} placeholder="APP_INTERNAL_TOKEN from server .env" />
+          {!adminConfigured && <p className="validation">Admin actions are disabled. Set APP_INTERNAL_TOKEN in the private server .env and rebuild the backend.</p>}
+        </div>
+      </section>
 
       <section className="grid">
         <article className="card">
@@ -495,7 +693,7 @@ export default function App() {
           <button disabled={busy} onClick={saveWorkflow}>Save workflow</button>
         </article>
 
-        <article className="card">
+        <article className="card" id="inputs-run">
           <h2>2. Inputs & Run</h2>
 
           <p className="muted">
@@ -572,14 +770,17 @@ export default function App() {
       <section className="card jobs">
         <div className="row">
           <h2>3. Recent jobs</h2>
-          <button className="ghost" onClick={refreshJobs}>Refresh</button>
+          <button className="ghost" onClick={() => refreshJobs(true)}>Refresh all</button>
         </div>
 
         <div className="joblist">
           {jobs.length === 0 && <p className="muted">No jobs yet.</p>}
 
           {jobs.map(j => (
-            <Job key={j.id} job={j} fallbackPriority={priority} />
+            <Job key={j.id} job={j} fallbackPriority={priority}
+              disabled={jobBusyId === j.id}
+              adminReady={adminConfigured && Boolean(adminToken)}
+              onEdit={editJob} onRetry={retryJob} onDelete={hideJob} onRefresh={refreshOneJob} />
           ))}
         </div>
       </section>
@@ -705,44 +906,69 @@ function VariableField({
   );
 }
 
-function Job({ job, fallbackPriority }) {
-  const images = collectImages(job.output);
+function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onDelete, onRefresh }) {
+  const [images, setImages] = useState([]);
+  const [imageError, setImageError] = useState("");
+  const [loadingImages, setLoadingImages] = useState(false);
 
-  return (
-    <div className="job">
-      <div>
-        <strong>{job.workflow_id}</strong>
-        <div className="mono">{job.id}</div>
-        <div className="hint">Priority: {job.priority || fallbackPriority || ""}</div>
-      </div>
-
-      <span className={`pill ${job.state}`}>{job.state}</span>
-
-      <div className="outputs">
-        {images.map((u, i) => (
-          <a key={i} href={u} target="_blank" rel="noreferrer">
-            output {i + 1}
-          </a>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function collectImages(value) {
-  const found = [];
-
-  function walk(v) {
-    if (Array.isArray(v)) return v.forEach(walk);
-    if (v && typeof v === "object") return Object.values(v).forEach(walk);
-
-    if (typeof v === "string" && /^https?:\/\//.test(v)) {
-      if (/\.(png|jpe?g|webp)(\?|$)/i.test(v) || v.includes("X-Amz-")) {
-        found.push(v);
-      }
+  async function refreshImages() {
+    setLoadingImages(true);
+    setImageError("");
+    try {
+      const response = await api(`/jobs/${encodeURIComponent(job.id)}/images`);
+      setImages(response.images || []);
+      if (!(response.images || []).length) setImageError("No output image has been found in R2 yet.");
+    } catch (e) {
+      setImageError(e.message);
+    } finally {
+      setLoadingImages(false);
     }
   }
 
-  walk(value);
-  return [...new Set(found)].slice(0, 8);
+  useEffect(() => {
+    if (job.state === "succeeded") refreshImages();
+  }, [job.id, job.state]);
+
+  const retryable = RETRYABLE_STATES.has(job.state) && job.variables !== null;
+  const canManage = adminReady && !disabled;
+  return (
+    <div className="job">
+      <div className="job-top">
+        <div>
+          <strong>{job.workflow_id}</strong>
+          <div className="mono">{job.id}</div>
+          <div className="hint">Priority: {job.priority || fallbackPriority || ""}</div>
+          <div className="hint">Created: {job.created_at ? new Date(job.created_at).toLocaleString() : "unknown"}</div>
+        </div>
+        <span className={`pill ${job.state}`}>{job.state}</span>
+      </div>
+      {job.state === "stalled" && (
+        <p className="validation">Overdue — the remote job may still be queued or running. Retry could create a duplicate.</p>
+      )}
+      {job.error_text && <p className="validation">{job.error_text}</p>}
+      {job.poll_warning && <p className="hint">{job.poll_warning}</p>}
+      <div className="job-actions">
+        <button className="ghost" disabled={disabled} onClick={() => onEdit(job)}>Edit &amp; Run</button>
+        {retryable && <button className="ghost" disabled={!canManage} onClick={() => onRetry(job)}>Retry</button>}
+        <button className="danger ghost" disabled={!canManage} onClick={() => onDelete(job)}>Remove</button>
+        <button className="ghost" disabled={disabled} onClick={() => onRefresh(job)}>Refresh status</button>
+        <button className="ghost" disabled={loadingImages} onClick={refreshImages}>
+          {loadingImages ? "Checking…" : "Check outputs"}
+        </button>
+      </div>
+      {images.length > 0 && (
+        <div className="output-thumbnails">
+          {images.map((image, index) => (
+            <a key={image.key} href={image.url} target="_blank" rel="noreferrer"
+              title={`Open output ${index + 1}`}>
+              <img src={image.url} alt={`Output ${index + 1}`} loading="lazy"
+                onError={() => setImageError("A preview failed to load. Refresh outputs to renew the signed link.")} />
+              <span>Output {index + 1}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {imageError && <p className="hint">{imageError}</p>}
+    </div>
+  );
 }

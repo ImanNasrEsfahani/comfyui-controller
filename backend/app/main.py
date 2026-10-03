@@ -4,14 +4,16 @@ from pydantic import BaseModel, Field
 from typing import Any
 from uuid import uuid4
 from pathlib import Path
+import hmac
+import os
 import re
+import httpx
 
 from .config import settings
-from . import db, storage, salad
+from . import db, storage, salad, salad_control, job_lifecycle
 from .template import render_template
 
-app = FastAPI(title=settings.app_name, version="1.1.0")
-
+app = FastAPI(title=settings.app_name, version="1.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
@@ -21,19 +23,43 @@ app.add_middleware(
 )
 
 
+def stale_minutes():
+    # The value is optional so existing server .env files remain compatible.
+    try:
+        return max(10, min(7 * 24 * 60, int(os.getenv("JOB_STALE_MINUTES", "180"))))
+    except ValueError:
+        return 180
+
+
 @app.on_event("startup")
 def startup():
     db.init_db()
 
 
 def check_internal_token(x_internal_token: str | None):
-    if settings.internal_token and x_internal_token != settings.internal_token:
+    if settings.internal_token and not hmac.compare_digest(
+        x_internal_token or "", settings.internal_token
+    ):
         raise HTTPException(status_code=401, detail="invalid internal token")
+
+
+def check_admin_token(x_internal_token: str | None):
+    if not settings.internal_token:
+        raise HTTPException(503, "Set APP_INTERNAL_TOKEN in the private server .env before enabling administrative actions")
+    check_internal_token(x_internal_token)
 
 
 def safe_name(name: str):
     name = Path(name or "upload.bin").name
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+
+
+def salad_error(exc):
+    if isinstance(exc, httpx.HTTPStatusError):
+        return HTTPException(502, f"Salad API rejected the operation (HTTP {exc.response.status_code})")
+    if isinstance(exc, ValueError):
+        return HTTPException(409, str(exc))
+    return HTTPException(502, f"Salad API unavailable: {type(exc).__name__}")
 
 
 class WorkflowIn(BaseModel):
@@ -49,6 +75,10 @@ class JobIn(BaseModel):
     priority: str | None = None
 
 
+class RetryIn(BaseModel):
+    allow_duplicate: bool = False
+
+
 @app.get("/health")
 def health():
     return {
@@ -57,6 +87,7 @@ def health():
         "default_priority": settings.salad_priority,
         "gpu_name": settings.salad_gpu_name,
         "queue_name": settings.salad_queue_name(),
+        "admin_configured": bool(settings.internal_token),
     }
 
 
@@ -79,10 +110,7 @@ def put_workflow(workflow_id: str, body: WorkflowIn, x_internal_token: str | Non
     if workflow_id != body.id:
         raise HTTPException(400, "path id and body id must match")
     if "nodes" in body.api_prompt or "last_node_id" in body.api_prompt:
-        raise HTTPException(
-            400,
-            "api_prompt looks like ComfyUI UI workflow format. Export API Format first.",
-        )
+        raise HTTPException(400, "api_prompt looks like ComfyUI UI workflow format. Export API Format first.")
     return db.save_workflow(body.id, body.name, body.api_prompt, body.ui_workflow)
 
 
@@ -98,16 +126,13 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
     upload_id = str(uuid4())
     filename = safe_name(file.filename)
     key = f"inputs/{upload_id}/{filename}"
-
     f = file.file
     current = f.tell()
     f.seek(0, 2)
     size = f.tell()
     f.seek(current)
-
     if size > settings.max_upload_mb * 1024 * 1024:
         raise HTTPException(413, f"file exceeds {settings.max_upload_mb} MB")
-
     f.seek(0)
     storage.upload_fileobj(f, key, file.content_type)
     return {
@@ -119,25 +144,23 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
     }
 
 
-@app.post("/api/jobs")
-def create_job(body: JobIn, x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
-    selected_priority = (body.priority or settings.salad_priority).strip().lower()
+def submit_job(workflow_id, variables, priority=None):
+    selected_priority = (priority or settings.salad_priority).strip().lower()
     if selected_priority != settings.salad_priority:
         raise HTTPException(400, f"Only priority {settings.salad_priority!r} is available")
-
-    wf = db.get_workflow(body.workflow_id)
+    wf = db.get_workflow(workflow_id)
     if not wf:
         raise HTTPException(404, "workflow not found")
-
+    if not isinstance(variables, dict):
+        raise HTTPException(400, "variables must be an object")
     try:
-        rendered = render_template(wf["api_prompt"], body.variables)
+        # Store durable s3:// references; renew signed URLs for EVERY attempt.
+        runtime_variables = storage.sign_s3_values(variables)
+        rendered = render_template(wf["api_prompt"], runtime_variables)
     except KeyError as exc:
         raise HTTPException(400, str(exc))
-
     local_id = str(uuid4())
     selected_queue = salad.queue_name_for_priority(selected_priority)
-
     prompt_request = {
         "id": local_id,
         "prompt": rendered,
@@ -147,83 +170,170 @@ def create_job(body: JobIn, x_internal_token: str | None = Header(default=None))
             "async": False,
         },
     }
-
     db.create_job(
-        local_id,
-        body.workflow_id,
-        prompt_request,
+        local_id, workflow_id, prompt_request,
         priority=selected_priority,
         salad_queue=selected_queue,
+        variables=variables,
     )
-
     try:
-        response, queue_name, normalized_priority = salad.submit_job(
+        response, _, _ = salad.submit_job(
             prompt_request,
             priority=selected_priority,
-            metadata={
-                "controller_job_id": local_id,
-                "workflow_id": body.workflow_id,
-            },
+            metadata={"controller_job_id": local_id, "workflow_id": workflow_id},
         )
-
         salad_id = response.get("id") or response.get("job_id")
         if not salad_id:
             raise RuntimeError("Salad response has no job id")
-
         state = response.get("status") or response.get("state") or "pending"
-        db.update_job(
-            local_id,
-            salad_job_id=str(salad_id),
-            state=state,
-            output=response,
-        )
-
+        db.update_job(local_id, salad_job_id=str(salad_id), state=state, output=response)
     except Exception as exc:
+        # The remote service could have accepted a request despite a network
+        # exception: do not assert that retrying cannot produce a duplicate.
         db.update_job(local_id, state="submit_failed", error=str(exc))
-        raise HTTPException(502, f"Salad job submission failed: {exc}")
-
+        raise HTTPException(502, f"Salad job submission failed (local job {local_id}): {type(exc).__name__}")
     return db.get_job(local_id)
 
 
-@app.get("/api/jobs")
-def jobs(limit: int = 50):
-    return [public_job(item) for item in db.list_jobs(limit)]
+@app.post("/api/jobs")
+def create_job(body: JobIn, x_internal_token: str | None = Header(default=None)):
+    check_internal_token(x_internal_token)
+    return public_job(submit_job(body.workflow_id, body.variables, body.priority))
+
+
+def note_stale(item):
+    if item and item.get("state") not in job_lifecycle.TERMINAL and \
+            item.get("state") != "stalled" and \
+            job_lifecycle.age_minutes(item.get("created_at")) >= stale_minutes():
+        db.mark_stalled(item["id"], stale_minutes())
+        return db.get_job(item["id"])
+    return item
 
 
 def public_job(item: dict):
     if not item:
         return item
     data = dict(item)
+    # Do not advertise an expired signed URL as a valid editable input.
     data["output"] = storage.sign_s3_values(data.get("output"))
     return data
+
+
+@app.get("/api/jobs")
+def jobs(limit: int = 50):
+    return [public_job(note_stale(item)) for item in db.list_jobs(limit)]
 
 
 @app.get("/api/jobs/{local_id}")
 def job(local_id: str):
     item = db.get_job(local_id)
-    if not item:
+    if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
-
     salad_id = item.get("salad_job_id")
-
-    if salad_id and item.get("state") not in {
-        "succeeded", "failed", "cancelled", "submit_failed"
-    }:
+    if salad_id and item.get("state") not in job_lifecycle.TERMINAL:
         try:
             queue_name = item.get("salad_queue") or settings.salad_legacy_queue
             if not queue_name:
-                raise RuntimeError("Historic job has no queue; set SALAD_LEGACY_QUEUE in .env")
+                raise RuntimeError("Historic job has no queue; configure SALAD_LEGACY_QUEUE")
             remote = salad.get_job(salad_id, queue_name)
-
             state = remote.get("status") or remote.get("state") or item["state"]
             output = remote.get("output")
             if output is None:
                 output = remote
-
-            db.update_job(local_id, state=state, output=output)
+            db.update_job(local_id, state=state, output=output,
+                          error="" if state in job_lifecycle.TERMINAL else None)
             item = db.get_job(local_id)
-
         except Exception as exc:
-            item["poll_warning"] = str(exc)
-
+            item["poll_warning"] = f"Salad poll failed: {type(exc).__name__}"
+    item = note_stale(item)
     return public_job(item)
+
+
+@app.get("/api/jobs/{local_id}/draft")
+def job_draft(local_id: str):
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    wf = db.get_workflow(item["workflow_id"])
+    if not wf:
+        raise HTTPException(409, "Original workflow was removed")
+    if item.get("variables") is not None:
+        return {"workflow_id": wf["id"], "variables": item["variables"], "legacy": False}
+    rendered = (item.get("request") or {}).get("prompt")
+    extracted = job_lifecycle.legacy_draft(wf.get("api_prompt"), rendered)
+    return {
+        "workflow_id": wf["id"], "variables": extracted, "legacy": True,
+        "warning": "Legacy job: edit fields and re-upload any image that cannot be recovered."
+    }
+
+
+@app.post("/api/jobs/{local_id}/retry")
+def retry_job(local_id: str, body: RetryIn, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    if item.get("state") not in job_lifecycle.RETRYABLE | {"stalled"}:
+        raise HTTPException(409, "This job is not retryable while it is active or succeeded")
+    if item.get("state") == "stalled" and not body.allow_duplicate:
+        raise HTTPException(409, "Remote job may still run; explicitly confirm a duplicate attempt")
+    if item.get("variables") is None:
+        raise HTTPException(409, "Legacy job has no saved variables. Use Edit & Run instead")
+    return public_job(submit_job(item["workflow_id"], item["variables"], item.get("priority")))
+
+
+@app.delete("/api/jobs/{local_id}", status_code=204)
+def hide_job(local_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    # A local hide NEVER cancels the corresponding remote Salad job.
+    db.hide_job(local_id)
+
+
+@app.get("/api/jobs/{local_id}/images")
+def images(local_id: str):
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    try:
+        images = storage.job_images(local_id, item.get("output"), include_storage=True)
+        return {"images": images}
+    except Exception as exc:
+        raise HTTPException(502, f"Cannot list output images: {type(exc).__name__}")
+
+
+@app.get("/api/salad/instances")
+def salad_instances():
+    try:
+        return salad_control.status()
+    except Exception as exc:
+        raise salad_error(exc)
+
+
+@app.post("/api/salad/stop")
+def stop_worker(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.stop()
+    except Exception as exc:
+        raise salad_error(exc)
+
+
+@app.post("/api/salad/start")
+def start_worker(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.start()
+    except Exception as exc:
+        raise salad_error(exc)
+
+
+@app.post("/api/salad/replica")
+def request_worker(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    try:
+        return salad_control.request_one_replica()
+    except Exception as exc:
+        raise salad_error(exc)

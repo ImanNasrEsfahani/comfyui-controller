@@ -1,0 +1,25 @@
+/* Job and instance controls: additive to the existing styles.css. */
+.instance-card { margin-bottom: 18px; }
+.instance-heading { gap: 16px; align-items: flex-start; }
+.instance-heading h2 { margin-bottom: 5px; }
+.instance-heading .hint { margin: 0 0 12px; }
+.instance-summary { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
+.instance-summary span { font-size: 12px; color: #cbd5e1; background: #0c1119; border: 1px solid #2a3444; padding: 7px 10px; border-radius: 10px; }
+.instance-list { display: grid; gap: 8px; }
+.instance-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #283344; border-radius: 12px; }
+.instance-item strong { text-transform: capitalize; }
+.instance-item .mono { overflow-wrap: anywhere; }
+.admin-auth { margin-top: 12px; max-width: 460px; }
+.admin-auth label { margin-top: 8px; }
+button.danger { border-color: #6e3030; color: #f4a6a6; }
+button.danger:hover { background: #402020; }
+.joblist .job { display: block; border-top: 1px solid #202938; padding: 16px 0; }
+.job-top { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.job-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.job-actions button { margin: 0; padding: 7px 10px; font-size: 12px; }
+.pill.stalled { border-color: #855a24; color: #f0bd7a; }
+.output-thumbnails { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.output-thumbnails a { display: flex; flex-direction: column; gap: 5px; color: #a9c5ff; font-size: 11px; text-decoration: none; }
+.output-thumbnails img { width: 96px; height: 96px; border-radius: 9px; border: 1px solid #303b4c; background: #070a0e; object-fit: cover; }
+.output-thumbnails a:hover img { border-color: #a9c5ff; }
+@media (max-width: 650px) { .instance-heading { flex-direction: column; } .instance-item { align-items: flex-start; flex-direction: column; } .output-thumbnails img { width: 80px; height: 80px; } }

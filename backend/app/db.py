@@ -2,6 +2,7 @@ import sqlite3
 import json
 from pathlib import Path
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from .config import settings
 
 
@@ -9,12 +10,17 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+@contextmanager
 def connect():
     p = Path(settings.db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db():
@@ -50,6 +56,11 @@ def init_db():
             c.execute(
                 f"ALTER TABLE jobs ADD COLUMN priority TEXT NOT NULL DEFAULT '{settings.salad_priority}'"
             )
+
+        if "variables_json" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN variables_json TEXT")
+        if "hidden" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
 
         if "salad_queue" not in cols:
             c.execute("ALTER TABLE jobs ADD COLUMN salad_queue TEXT")
@@ -109,19 +120,21 @@ def delete_workflow(workflow_id):
         c.execute("DELETE FROM workflows WHERE id=?", (workflow_id,))
 
 
-def create_job(local_id, workflow_id, request_payload, *, priority=None, salad_queue=None):
+def create_job(local_id, workflow_id, request_payload, *, priority=None, salad_queue=None, variables=None):
     priority = priority or settings.salad_priority
     now = utcnow()
     with connect() as c:
         c.execute(
             """INSERT INTO jobs
                (id,salad_job_id,workflow_id,state,request_json,
-                priority,salad_queue,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                priority,salad_queue,variables_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 local_id, None, workflow_id, "submitting",
                 json.dumps(request_payload, separators=(",", ":")),
-                priority, salad_queue, now, now,
+                priority, salad_queue,
+                json.dumps(variables, separators=(",", ":")) if variables is not None else None,
+                now, now,
             ),
         )
 
@@ -155,6 +168,8 @@ def get_job(local_id):
         d["request"] = json.loads(d.pop("request_json"))
         raw = d.pop("output_json")
         d["output"] = json.loads(raw) if raw else None
+        var_raw = d.pop("variables_json", None)
+        d["variables"] = json.loads(var_raw) if var_raw else None
         return d
 
 
@@ -162,7 +177,7 @@ def list_jobs(limit=50):
     limit = max(1, min(int(limit), 200))
     with connect() as c:
         rows = c.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM jobs WHERE hidden=0 ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
 
     result = []
@@ -171,5 +186,26 @@ def list_jobs(limit=50):
         d["request"] = json.loads(d.pop("request_json"))
         raw = d.pop("output_json")
         d["output"] = json.loads(raw) if raw else None
+        var_raw = d.pop("variables_json", None)
+        d["variables"] = json.loads(var_raw) if var_raw else None
         result.append(d)
     return result
+
+
+def hide_job(local_id):
+    with connect() as c:
+        cursor = c.execute(
+            "UPDATE jobs SET hidden=1, updated_at=? WHERE id=? AND hidden=0",
+            (utcnow(), local_id),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_stalled(local_id, minutes):
+    from .job_lifecycle import stale_message
+    with connect() as c:
+        c.execute(
+            """UPDATE jobs SET state='stalled', error_text=?, updated_at=?
+               WHERE id=? AND state IN ('pending','submitting','queued','waiting','processing','running')""",
+            (stale_message(minutes), utcnow(), local_id),
+        )
