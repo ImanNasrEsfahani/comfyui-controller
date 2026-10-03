@@ -1,0 +1,41 @@
+name: Test Direct Queue Migration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "salad-worker/**"
+      - "tests/test_direct_queue.py"
+      - "docker-compose.yml"
+      - ".github/workflows/test-direct-queue.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -r backend/requirements.txt pytest
+      - name: Run GPU-free queue, API and deployment regressions
+        run: PYTHONPATH=backend python -m pytest -q tests/test_direct_queue.py
+      - name: Verify Python and shell syntax
+        run: |
+          python -m compileall -q backend/app salad-worker
+          bash -n salad-worker/start.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compile frontend
+        run: |
+          npm --prefix frontend install --no-audit --no-fund
+          npm --prefix frontend run build

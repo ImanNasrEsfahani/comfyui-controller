@@ -16,6 +16,7 @@ def connect():
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         with conn:
             yield conn
@@ -25,6 +26,7 @@ def connect():
 
 def init_db():
     with connect() as c:
+        c.execute("PRAGMA journal_mode=WAL")
         c.executescript("""
         CREATE TABLE IF NOT EXISTS workflows (
             id TEXT PRIMARY KEY,
@@ -76,6 +78,23 @@ def init_db():
             (settings.salad_legacy_queue,),
         )
 
+        # Direct queue migration is additive: existing Salad Queue jobs retain
+        # their original execution_mode and can still be inspected/retried.
+        direct_columns = {
+            "execution_mode": "TEXT NOT NULL DEFAULT 'salad_queue'",
+            "attempts": "INTEGER NOT NULL DEFAULT 0",
+            "lease_token_hash": "TEXT",
+            "worker_id": "TEXT",
+            "lease_deadline": "REAL",
+            "last_heartbeat": "REAL",
+            "next_attempt_at": "REAL NOT NULL DEFAULT 0",
+        }
+        for name, ddl in direct_columns.items():
+            if name not in cols:
+                c.execute(f"ALTER TABLE jobs ADD COLUMN {name} {ddl}")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_direct_queue "
+                  "ON jobs(execution_mode,state,next_attempt_at,created_at)")
+
 
 def list_workflows():
     with connect() as c:
@@ -124,21 +143,22 @@ def delete_workflow(workflow_id):
         c.execute("DELETE FROM workflows WHERE id=?", (workflow_id,))
 
 
-def create_job(local_id, workflow_id, request_payload, *, priority=None, salad_queue=None, variables=None):
+def create_job(local_id, workflow_id, request_payload, *, priority=None, salad_queue=None, variables=None, execution_mode="salad_queue"):
     priority = priority or settings.salad_priority
     now = utcnow()
     with connect() as c:
         c.execute(
             """INSERT INTO jobs
                (id,salad_job_id,workflow_id,state,request_json,
-                priority,salad_queue,variables_json,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                priority,salad_queue,variables_json,created_at,updated_at,execution_mode)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                local_id, None, workflow_id, "submitting",
+                local_id, None, workflow_id,
+                "pending" if execution_mode == "direct" else "submitting",
                 json.dumps(request_payload, separators=(",", ":")),
                 priority, salad_queue,
                 json.dumps(variables, separators=(",", ":")) if variables is not None else None,
-                now, now,
+                now, now, execution_mode,
             ),
         )
 

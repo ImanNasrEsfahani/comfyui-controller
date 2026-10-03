@@ -8,7 +8,6 @@ ARG QVR_REPO=https://github.com/ImanNasrEsfahani/qwen-vast-recovery.git
 ARG QVR_COMMIT=4e8d67097bb469e499f35ab84c6d752c29414157
 ARG REACTOR_REPO=https://github.com/Gourieff/ComfyUI-ReActor.git
 ARG REACTOR_COMMIT=a12c5b19dcac9ae8b47e592da39c9711c8f8c756
-ARG SALAD_JOB_QUEUE_WORKER_VERSION=0.7.0
 
 # Deliberately bake only the FP8 diffusion model and its REQUIRED text encoder.
 # INT8 is an alternative to FP8, not an additional runtime requirement.
@@ -50,10 +49,6 @@ RUN python -c "import cv2; print('OpenCV loaded:', cv2.__version__)" && \
 RUN mkdir -p /opt/ComfyUI/user/default/workflows/qwen2511 && \
     cp -R /opt/qvr/workflows/* /opt/ComfyUI/user/default/workflows/qwen2511/
 
-ADD https://github.com/SaladTechnologies/salad-cloud-job-queue-worker/releases/download/v${SALAD_JOB_QUEUE_WORKER_VERSION}/salad-http-job-queue-worker_x86_64.tar.gz /tmp/salad-worker.tar.gz
-RUN tar -C /usr/local/bin -zxpf /tmp/salad-worker.tar.gz && \
-    rm -f /tmp/salad-worker.tar.gz
-
 COPY --chmod=755 model_parts.py /opt/qvr-salad/model_parts.py
 
 # Important: each of these is a SEPARATE Docker layer. Do not combine into
@@ -81,6 +76,7 @@ RUN python /opt/qvr-salad/model_parts.py verify fp8 && \
 COPY manifest.fp8.yaml /opt/qvr-salad/manifest.yaml
 COPY manifest.fp8-full.yaml /opt/qvr-salad/manifest.fp8-full.yaml
 COPY --chmod=755 start.sh /opt/qvr-salad/start.sh
+COPY --chmod=755 pull_worker.py /opt/qvr-salad/pull_worker.py
 COPY --chmod=755 verify_runtime.sh /opt/qvr-salad/verify_runtime.sh
 
 # Keep the Python headers and compiler: Triton needs them at prompt time.

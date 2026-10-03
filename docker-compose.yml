@@ -10,6 +10,21 @@ services:
       - "127.0.0.1:8100:8000"
     restart: unless-stopped
 
+  # Opt-in, single scheduler for the self-hosted queue. It does nothing to
+  # Salad unless DIRECT_QUEUE_ENABLED and DIRECT_GPU_AUTO_CONTROL are true.
+  scheduler:
+    profiles: [direct]
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.direct_scheduler"]
+    env_file:
+      - ./.env
+    volumes:
+      - controller_data:/app/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

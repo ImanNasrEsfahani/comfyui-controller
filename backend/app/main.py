@@ -10,10 +10,10 @@ import re
 import httpx
 
 from .config import settings
-from . import db, storage, salad, salad_control, job_lifecycle, settings_store
+from . import db, storage, salad, salad_control, job_lifecycle, settings_store, direct_queue
 from .template import render_template
 
-app = FastAPI(title=settings.app_name, version="1.2.0")
+app = FastAPI(title=settings.app_name, version="1.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
@@ -35,6 +35,11 @@ def stale_minutes():
 def startup():
     db.init_db()
     settings_store.seed()  # One-time migration of the original PRIVATE .env.
+    if direct_queue.enabled():
+        if not settings.internal_token:
+            raise RuntimeError("APP_INTERNAL_TOKEN is required in direct queue mode")
+        if len(os.getenv("DIRECT_WORKER_TOKEN", "")) < 32:
+            raise RuntimeError("DIRECT_WORKER_TOKEN must contain at least 32 characters")
 
 
 def check_internal_token(x_internal_token: str | None):
@@ -48,6 +53,14 @@ def check_admin_token(x_internal_token: str | None):
     if not settings.internal_token:
         raise HTTPException(503, "Set APP_INTERNAL_TOKEN in the private server .env before enabling administrative actions")
     check_internal_token(x_internal_token)
+
+
+def check_worker_token(x_worker_token: str | None):
+    if not direct_queue.enabled():
+        raise HTTPException(503, "Direct worker mode is disabled")
+    expected = os.getenv("DIRECT_WORKER_TOKEN", "")
+    if len(expected) < 32 or not hmac.compare_digest(x_worker_token or "", expected):
+        raise HTTPException(401, "invalid worker token")
 
 
 def safe_name(name: str):
@@ -94,7 +107,8 @@ def health():
         "app": settings.app_name,
         "default_priority": settings.salad_priority,
         "gpu_name": settings.salad_gpu_name,
-        "queue_name": settings.salad_queue_name(),
+        "queue_name": "direct" if direct_queue.enabled() else settings.salad_queue_name(),
+        "queue_mode": "direct" if direct_queue.enabled() else "salad_queue",
         "admin_configured": bool(settings.internal_token),
     }
 
@@ -168,7 +182,7 @@ def submit_job(workflow_id, variables, priority=None):
     except KeyError as exc:
         raise HTTPException(400, str(exc))
     local_id = str(uuid4())
-    selected_queue = salad.queue_name_for_priority(selected_priority)
+    selected_queue = "direct" if direct_queue.enabled() else salad.queue_name_for_priority(selected_priority)
     prompt_request = {
         "id": local_id,
         "prompt": rendered,
@@ -178,6 +192,24 @@ def submit_job(workflow_id, variables, priority=None):
             "async": False,
         },
     }
+    if direct_queue.enabled():
+        # Persist S3 URIs, not pre-signed URLs that expire in the local queue.
+        # Convert only URLs pointing to our own input bucket.
+        def durable(value):
+            if isinstance(value, dict):
+                return {k: durable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [durable(v) for v in value]
+            if isinstance(value, str):
+                recovered = job_lifecycle.recover_image_ref(value)
+                return recovered if recovered else value
+            return value
+        prompt_request["prompt"] = durable(render_template(wf["api_prompt"], variables))
+        db.create_job(
+            local_id, workflow_id, prompt_request, priority=selected_priority,
+            salad_queue="direct", variables=variables, execution_mode="direct",
+        )
+        return db.get_job(local_id)
     db.create_job(
         local_id, workflow_id, prompt_request,
         priority=selected_priority,
@@ -210,6 +242,8 @@ def create_job(body: JobIn, x_internal_token: str | None = Header(default=None))
 
 
 def note_stale(item):
+    if item and item.get("execution_mode") == "direct":
+        return item
     if item and item.get("state") not in job_lifecycle.TERMINAL and \
             item.get("state") != "stalled" and \
             job_lifecycle.age_minutes(item.get("created_at")) >= stale_minutes():
@@ -222,6 +256,9 @@ def public_job(item: dict):
     if not item:
         return item
     data = dict(item)
+    # This hash is internal lease bookkeeping, never an API field.
+    data.pop("lease_token_hash", None)
+    data.pop("worker_id", None)
     # Do not advertise an expired signed URL as a valid editable input.
     data["output"] = storage.sign_s3_values(data.get("output"))
     return data
@@ -238,7 +275,7 @@ def job(local_id: str):
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
     salad_id = item.get("salad_job_id")
-    if salad_id and item.get("state") not in job_lifecycle.TERMINAL:
+    if salad_id and item.get("execution_mode") != "direct" and item.get("state") not in job_lifecycle.TERMINAL:
         try:
             queue_name = item.get("salad_queue") or settings.salad_legacy_queue
             if not queue_name:
@@ -283,7 +320,7 @@ def retry_job(local_id: str, body: RetryIn, x_internal_token: str | None = Heade
         raise HTTPException(404, "job not found")
     if item.get("state") not in job_lifecycle.RETRYABLE | {"stalled"}:
         raise HTTPException(409, "This job is not retryable while it is active or succeeded")
-    if item.get("state") == "stalled" and not body.allow_duplicate:
+    if item.get("state") == "stalled" and item.get("execution_mode") != "direct" and not body.allow_duplicate:
         raise HTTPException(409, "Remote job may still run; explicitly confirm a duplicate attempt")
     if item.get("variables") is None:
         raise HTTPException(409, "Legacy job has no saved variables. Use Edit & Run instead")
@@ -296,7 +333,10 @@ def hide_job(local_id: str, x_internal_token: str | None = Header(default=None))
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
-    # A local hide NEVER cancels the corresponding remote Salad job.
+    # Hide never cancels a running task. For pending direct tasks, cancel it
+    # first so it cannot be dispatched after being hidden.
+    if item.get("execution_mode") == "direct" and item.get("state") == "pending":
+        direct_queue.cancel_pending(local_id)
     db.hide_job(local_id)
 
 
@@ -385,3 +425,86 @@ def request_worker(x_internal_token: str | None = Header(default=None)):
         return salad_control.request_one_replica()
     except Exception as exc:
         raise salad_error(exc)
+
+
+# ───── Direct pull-worker API. All routes require a separate strong token. ─────
+class WorkerHello(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=128)
+
+
+class WorkerLease(BaseModel):
+    lease_token: str = Field(min_length=32, max_length=256)
+
+
+class WorkerComplete(WorkerLease):
+    output: dict[str, Any]
+
+
+class WorkerFailure(WorkerLease):
+    error: str = Field(min_length=1, max_length=600)
+    retryable: bool = False
+
+
+@app.post("/api/worker/hello")
+def worker_hello(body: WorkerHello, x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    direct_queue.worker_seen(body.worker_id)
+    return {"accepted": True}
+
+
+@app.post("/api/worker/claim")
+def worker_claim(body: WorkerHello, x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    if direct_queue.load_setting("direct_hold", False):
+        raise HTTPException(409, "GPU controller is on HOLD; reset it before claiming jobs")
+    return direct_queue.claim(body.worker_id)
+
+
+@app.post("/api/worker/heartbeat/{local_id}")
+def worker_heartbeat(local_id: str, body: WorkerLease,
+                     x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    if not direct_queue.heartbeat(local_id, body.lease_token):
+        raise HTTPException(409, "lease expired or is no longer owned by this worker")
+    return {"accepted": True}
+
+
+@app.post("/api/worker/complete/{local_id}")
+def worker_complete(local_id: str, body: WorkerComplete,
+                    x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    if not direct_queue.finish(local_id, body.lease_token, body.output):
+        raise HTTPException(409, "lease expired or result already committed")
+    return {"accepted": True}
+
+
+@app.post("/api/worker/fail/{local_id}")
+def worker_fail(local_id: str, body: WorkerFailure,
+                x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    if not direct_queue.fail(local_id, body.lease_token, body.error, body.retryable):
+        raise HTTPException(409, "lease expired or failure already recorded")
+    return {"accepted": True}
+
+
+@app.get("/api/direct/status")
+def direct_status(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    return {
+        "enabled": direct_queue.enabled(),
+        "gpu_auto_control": os.getenv("DIRECT_GPU_AUTO_CONTROL", "false").lower() == "true",
+        "jobs": direct_queue.counters(),
+        "hold": direct_queue.load_setting("direct_hold", False),
+        "keep_warm": bool(direct_queue.load_setting("direct_keep_warm", False)),
+        "worker_seen": direct_queue.load_setting("direct_worker_seen", None),
+    }
+
+
+@app.post("/api/direct/reset-hold")
+def direct_reset_hold(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    if not direct_queue.enabled():
+        raise HTTPException(409, "Direct mode is disabled")
+    direct_queue.save_setting("direct_hold", False)
+    direct_queue.save_setting("direct_boot_started", 0)
+    return {"accepted": True, "message": "GPU controller HOLD cleared"}

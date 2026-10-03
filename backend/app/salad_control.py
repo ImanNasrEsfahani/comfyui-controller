@@ -9,7 +9,7 @@ import re
 import time
 import threading
 from uuid import uuid4
-from . import settings_store, db
+from . import settings_store, db, direct_queue
 from .config import settings
 from . import salad
 
@@ -36,16 +36,20 @@ def status():
     if not isinstance(instances, list):
         instances = []
     state = group.get("current_state") or {}
+    is_direct = direct_queue.enabled()
     return {
+        "queue_mode": "direct" if is_direct else "salad_queue",
+        "auto_gpu_control": os.getenv("DIRECT_GPU_AUTO_CONTROL", "false").lower() == "true" if is_direct else None,
+        "hold": direct_queue.load_setting("direct_hold", False) if is_direct else False,
         "name": group.get("name"),
         "status": state.get("status"),
         "pending_change": bool(group.get("pending_change")),
         "replicas": group.get("replicas", 0),
         "counts": state.get("instance_status_counts") or {},
         "autoscaler_enabled": bool(group.get("queue_autoscaler")),
-        "keep_warm": (group.get("queue_autoscaler") or {}).get("min_replicas") == 1,
-        "min_replicas": (group.get("queue_autoscaler") or {}).get("min_replicas"),
-        "max_replicas": (group.get("queue_autoscaler") or {}).get("max_replicas"),
+        "keep_warm": bool(direct_queue.load_setting("direct_keep_warm", False)) if is_direct else (group.get("queue_autoscaler") or {}).get("min_replicas") == 1,
+        "min_replicas": (1 if direct_queue.load_setting("direct_keep_warm", False) else 0) if is_direct else (group.get("queue_autoscaler") or {}).get("min_replicas"),
+        "max_replicas": 1 if is_direct else (group.get("queue_autoscaler") or {}).get("max_replicas"),
         "instances": [{
             "id": item.get("id"),
             "state": item.get("state"),
@@ -62,11 +66,18 @@ def stop():
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is still pending")
-    if int((group.get("queue_autoscaler") or {}).get("min_replicas", 0)) == 1:
+    if direct_queue.enabled():
+        if direct_queue.load_setting("direct_keep_warm", False):
+            raise ValueError("Keep Warm is enabled. Disable it before stopping")
+        if direct_queue.counters()["running"]:
+            raise ValueError("A direct job is running; stopping will interrupt it")
+    elif int((group.get("queue_autoscaler") or {}).get("min_replicas", 0)) == 1:
         raise ValueError("Keep Warm is enabled. Return to Auto first, then Stop.")
     if (group.get("current_state") or {}).get("status") == "stopped":
         return {"accepted": False, "message": "Already stopped"}
     request("POST", "/stop")
+    if direct_queue.enabled():
+        direct_queue.save_setting("direct_boot_started", 0)
     return {"accepted": True, "message": "Stop requested for the container group"}
 
 
@@ -89,6 +100,8 @@ def request_one_replica():
     if (group.get("replicas") or 0) >= 1:
         return {"accepted": False, "message": "One replica is already requested"}
     request("PATCH", json_body={"replicas": 1})
+    if direct_queue.enabled():
+        direct_queue.save_setting("direct_boot_started", time.time())
     return {"accepted": True, "message": "One replica requested"}
 
 
@@ -102,6 +115,13 @@ def set_keep_warm(enabled):
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is pending; refresh and retry")
+    if direct_queue.enabled():
+        if enabled and (group.get("current_state") or {}).get("status") == "stopped":
+            raise ValueError("Start the group first, then enable Keep Warm")
+        direct_queue.save_setting("direct_keep_warm", bool(enabled))
+        return {"accepted": True, "message":
+            "Direct Keep Warm enabled; one requested GPU will remain allocated until turned off" if enabled
+            else "Direct Keep Warm disabled; GPU auto-stop requires DIRECT_GPU_AUTO_CONTROL=true (or use Stop manually)"}
     config = group.get("queue_autoscaler")
     if not isinstance(config, dict):
         raise ValueError("This group has no queue autoscaler; refusing to change it")
@@ -203,10 +223,42 @@ def _new_group_payload(config, gpu_id):
     }
     if os.environ.get("HF_TOKEN", "").strip():
         env["HF_TOKEN"] = os.environ["HF_TOKEN"].strip()
+    if direct_queue.enabled():
+        backend_url = os.environ.get("DIRECT_BACKEND_URL", "").strip().rstrip("/")
+        worker_token = os.environ.get("DIRECT_WORKER_TOKEN", "")
+        if not backend_url.startswith("https://") or len(worker_token) < 32:
+            raise ValueError("Set HTTPS DIRECT_BACKEND_URL and strong DIRECT_WORKER_TOKEN in private .env")
+        env["DIRECT_BACKEND_URL"] = backend_url
+        env["DIRECT_WORKER_TOKEN"] = worker_token
+        env["DIRECT_WORKER_JOB_TIMEOUT_SECONDS"] = os.environ.get("DIRECT_WORKER_JOB_TIMEOUT_SECONDS", "3600")
     if _env_int("SALAD_MAX_REPLICAS") != 1:
         raise ValueError("This controller supports one GPU replica only")
     if _env_int("SALAD_MIN_REPLICAS") != 0:
         raise ValueError("New groups must begin with min_replicas=0")
+    if direct_queue.enabled():
+        # Never attach a Salad queue/autoscaler or inherit the temporary IMDS
+        # test command. This must be a NEW group, not an in-place conversion.
+        return {
+            "name": config["group_name"],
+            "display_name": config["display_name"],
+            "container": {
+                "image": config["image"],
+                "priority": settings.salad_priority,
+                "resources": {
+                    "cpu": _env_int("SALAD_CPU"),
+                    "memory": _env_int("SALAD_MEMORY_MB"),
+                    "shm_size": _env_int("SALAD_SHM_MB"),
+                    "storage_amount": _env_int("SALAD_STORAGE_GB") * 1024 ** 3,
+                    "gpu_classes": [gpu_id],
+                },
+                "environment_variables": env,
+            },
+            "replicas": 0,
+            "restart_policy": "never",  # no automatic crash/download loop
+            "autostart_policy": False,
+            "readiness_probe": _probe("SALAD_READINESS", "SALAD_READINESS_PATH"),
+            "startup_probe": _probe("SALAD_STARTUP", "SALAD_STARTUP_PATH"),
+        }
     return {
         "name": config["group_name"],
         "display_name": config["display_name"],
@@ -284,7 +336,10 @@ def _assert_safe_to_switch(current, group):
     if (group.get("replicas") or 0) > 0 or \
             int((group.get("queue_autoscaler") or {}).get("min_replicas", 0)) > 0:
         raise ValueError("Active GPU or Keep Warm is on. Return to Auto and wait for 0 replicas before Deploy")
-    # A job can still be outstanding even after the GPU has disappeared.
+    # Preserve historic Salad jobs in their original queue. They can be
+    # inspected but are NEVER silently converted or dispatched on the new GPU.
+    if direct_queue.enabled():
+        return
     unfinished = {"pending", "running", "stalled", "created"}
     for job in db.list_jobs(100):
         if job.get("state") in unfinished and \
@@ -307,7 +362,10 @@ def deploy_draft():
             return {"accepted": False, "message": "No changes to deploy", **state}
         old_group = _get_group(current["group_name"])
         _assert_safe_to_switch(current, old_group)
-        _ensure_queue()
+        if not direct_queue.enabled():
+            _ensure_queue()
+        if direct_queue.enabled() and desired["group_name"] == current["group_name"] and old_group and (old_group.get("queue_connection") or old_group.get("queue_autoscaler")):
+            raise ValueError("Direct queue migration requires a NEW Container Group name; the legacy group is preserved")
         same_name = desired["group_name"] == current["group_name"]
         same_display = desired["display_name"] == current["display_name"]
         # Safe in-place image update if the active group is idle and the name
@@ -356,7 +414,9 @@ def deploy_draft():
             break
         if group is None:
             raise ValueError("Salad could not allocate an unused group name after 8 attempts")
-        _wait_settled(candidate, desired["image"])
+        verified_group = _wait_settled(candidate, desired["image"])
+        if direct_queue.enabled() and (verified_group.get("queue_connection") or verified_group.get("queue_autoscaler") or verified_group.get("restart_policy") != "never"):
+            raise ValueError("New group still has a Salad Queue/autoscaler or restart policy mismatch; not activating")
         # Stop only the OLD idle group, and never silently delete it.
         if old_group and (old_group.get("current_state") or {}).get("status") != "stopped":
             _api("POST", _group_path(current["group_name"]) + "/stop")

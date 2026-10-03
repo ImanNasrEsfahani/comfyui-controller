@@ -443,6 +443,9 @@ def report(gpu_id, apply, bootstrap=False):
 
 
 def main():
+    if os.environ.get("DIRECT_QUEUE_ENABLED", "false").lower() == "true":
+        raise SystemExit("Direct queue mode uses the Backend Settings > Deploy saved draft. "
+                         "The legacy Salad queue CLI is disabled to prevent accidental reattachment.")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Create/reconcile only the configured Queue/Group")
     parser.add_argument(

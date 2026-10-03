@@ -46,11 +46,11 @@ echo "[qvr-salad] ready timeout: ${READY_TIMEOUT_SECONDS}s"
 "$API_BIN" &
 API_PID=$!
 cleanup() {
-  kill "${QUEUE_PID:-}" "$API_PID" 2>/dev/null || true
+  kill "${WORKER_PID:-}" "$API_PID" 2>/dev/null || true
 }
 trap cleanup EXIT TERM INT
 
-echo "[qvr-salad] waiting for /ready before connecting to the Job Queue..."
+echo "[qvr-salad] waiting for /ready before connecting to the direct backend..."
 started_at="$(date +%s)"
 last_progress=0
 while true; do
@@ -80,11 +80,13 @@ done
 echo "[qvr-salad] validating CUDA/ReActor/core asset integrity..."
 /opt/qvr-salad/verify_runtime.sh
 
-echo "[qvr-salad] runtime verified; starting Salad Job Queue Worker"
-/usr/local/bin/salad-http-job-queue-worker &
-QUEUE_PID=$!
+echo "[qvr-salad] runtime verified; starting direct pull worker (no IMDS)"
+python /opt/qvr-salad/pull_worker.py &
+WORKER_PID=$!
 
-wait -n "$QUEUE_PID" "$API_PID"
+set +e
+wait -n "$WORKER_PID" "$API_PID"
 RC=$?
+set -e
 echo "[qvr-salad] a critical process exited: $RC" >&2
 exit "$RC"

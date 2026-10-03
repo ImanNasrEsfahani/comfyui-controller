@@ -350,13 +350,19 @@ export default function App() {
       return;
     }
     const prompts = {
-      stop: "STOP the entire Container Group? The only worker and any running task may be interrupted. Pending remote jobs remain in Salad.",
+      stop: instanceInfo?.queue_mode === "direct"
+        ? "STOP the direct GPU Container Group? A running job must finish first; pending jobs stay in SQLite."
+        : "STOP the entire Container Group? The only worker and any running task may be interrupted. Pending remote jobs remain in Salad.",
       start: "Start the Container Group? After it settles you can request one replica.",
       replica: "Request one billable GPU replica now?",
-      "keep-warm": "Keep one billable RTX 5090 available even when the queue is empty? " +
-        "This may cause a Salad configuration update/reallocation. Enable before starting a job.",
-      "auto-scale": "Return to automatic scale-to-zero? Salad will release the GPU once idle; " +
-        "verify the instance count before assuming billing has stopped."
+      "keep-warm": instanceInfo?.queue_mode === "direct"
+        ? "Keep one billable GPU active while idle? This changes the local controller policy; start the GPU separately if it is off."
+        : "Keep one billable RTX 5090 available even when the queue is empty? " +
+          "This may cause a Salad configuration update/reallocation. Enable before starting a job.",
+      "auto-scale": instanceInfo?.queue_mode === "direct"
+        ? "Disable direct Keep Warm? The scheduler auto-stops idle GPUs only when DIRECT_GPU_AUTO_CONTROL=true."
+        : "Return to automatic scale-to-zero? Salad will release the GPU once idle; " +
+          "verify the instance count before assuming billing has stopped."
     };
     if (!window.confirm(prompts[action])) return;
     setGroupBusy(true);
@@ -439,6 +445,21 @@ export default function App() {
 
   async function refreshWorkflows() {
     setWorkflows(await api("/workflows"));
+  }
+
+  async function resetGpuHold() {
+    if (!adminConfigured || !adminToken) return;
+    if (!window.confirm("Clear GPU HOLD? Only do this after resolving the worker error. Auto GPU mode may allocate a billable machine.")) return;
+    setGroupBusy(true);
+    try {
+      const response = await api("/direct/reset-hold", { method: "POST" });
+      setMessage(response.message || "GPU HOLD cleared.");
+      await refreshInstances();
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setGroupBusy(false);
+    }
   }
 
   async function refreshJobs(allPending = false) {
@@ -666,8 +687,13 @@ export default function App() {
               <span><strong>{instanceInfo.instances?.length ?? 0}</strong> instances</span>
               <span>Requested: {instanceInfo.replicas ?? 0}</span>
               <span>Group: <strong>{instanceInfo.status || "unknown"}</strong></span>
-              <span>Autoscaler: {instanceInfo.autoscaler_enabled ? "enabled" : "off"}</span>
-              <span>Mode: <strong>{instanceInfo.keep_warm ? "Keep Warm · 1 GPU" : "Auto · scale to zero"}</strong></span>
+              <span>{instanceInfo.queue_mode === "direct"
+                ? `Controller: SQLite pull queue · ${instanceInfo.auto_gpu_control ? "auto GPU" : "manual GPU"}`
+                : `Autoscaler: ${instanceInfo.autoscaler_enabled ? "enabled" : "off"}`}</span>
+              <span>Mode: <strong>{instanceInfo.keep_warm ? "Keep Warm · 1 GPU"
+                : instanceInfo.queue_mode === "direct" && !instanceInfo.auto_gpu_control
+                  ? "Manual · no automatic start/stop" : "Auto · scale to zero"}</strong></span>
+              {instanceInfo.hold && <span>GPU HOLD: {String(instanceInfo.hold)}</span>}
               {instanceInfo.pending_change && <span>Change pending</span>}
             </div>
             <div className="instance-list">
@@ -689,13 +715,17 @@ export default function App() {
               {!(instanceInfo.instances || []).length && <p className="hint">No allocated instances.</p>}
             </div>
             <div className="button-row">
+              {instanceInfo.queue_mode === "direct" && instanceInfo.hold && (
+                <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured}
+                  onClick={resetGpuHold}>Reset GPU HOLD</button>
+              )}
               {instanceInfo.status === "stopped" ? (
-                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
                   onClick={() => groupAction("start")}>Start group</button>
               ) : (
                 <>
                   {Number(instanceInfo.replicas || 0) === 0 && (
-                    <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                    <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
                       onClick={() => groupAction("replica")}>Start 1 GPU replica</button>
                   )}
                   {Number(instanceInfo.replicas || 0) > 0 && !(instanceInfo.instances || []).length && (
@@ -707,11 +737,19 @@ export default function App() {
             </div>
             <div className="warm-controls">
               <div>
-                <strong>{instanceInfo.keep_warm ? "Keep Warm is ON" : "Auto scale-to-zero is ON"}</strong>
+                <strong>{instanceInfo.keep_warm ? "Keep Warm is ON"
+                  : instanceInfo.queue_mode === "direct" && !instanceInfo.auto_gpu_control
+                    ? "Direct GPU control is MANUAL" : "Auto scale-to-zero is ON"}</strong>
                 <p className="hint">
                   {instanceInfo.keep_warm
-                    ? "Salad keeps a minimum of 1 billable GPU while this mode is enabled. Return to Auto when editing is finished."
-                    : "Enable Keep Warm BEFORE a batch of edits so the GPU is not released between jobs."}
+                    ? (instanceInfo.queue_mode === "direct"
+                      ? "Local Keep Warm prevents automatic idle shutdown; start the GPU separately if it is stopped. Billing continues while allocated."
+                      : "Salad keeps a minimum of 1 billable GPU while this mode is enabled. Return to Auto when editing is finished.")
+                    : instanceInfo.queue_mode === "direct"
+                      ? (instanceInfo.auto_gpu_control
+                        ? "Local scheduler starts on demand and stops after the configured idle timeout."
+                        : "Start one replica manually. Automatic start/stop is disabled in private .env.")
+                      : "Enable Keep Warm BEFORE a batch of edits so the GPU is not released between jobs."}
                 </p>
                 {instanceInfo.pending_change && <p className="hint">Salad is applying the change. Refresh to confirm before starting another action.</p>}
               </div>
@@ -1085,7 +1123,7 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
         <span className={`pill ${job.state}`}>{job.state}</span>
       </div>
       {job.state === "stalled" && (
-        <p className="validation">Overdue — the remote job may still be queued or running. Retry could create a duplicate.</p>
+        <p className="validation">Overdue — confirm the previous execution has stopped before retrying.</p>
       )}
       {job.error_text && <p className="validation">{job.error_text}</p>}
       {job.poll_warning && <p className="hint">{job.poll_warning}</p>}

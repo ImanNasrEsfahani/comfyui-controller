@@ -10,6 +10,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+if os.environ.get("DIRECT_QUEUE_ENABLED", "false").lower() == "true":
+    raise SystemExit("Direct queue: deploy a NEW group through Backend Settings in the UI; legacy CLI disabled")
+
 API = "http://127.0.0.1:8100/api/salad/settings"
 token = os.environ.get("APP_INTERNAL_TOKEN", "").strip()
 if not token:

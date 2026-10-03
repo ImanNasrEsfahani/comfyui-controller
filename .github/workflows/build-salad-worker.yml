@@ -21,6 +21,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate direct queue before expensive GPU image build
+        run: |
+          python3 -m pip install -q -r backend/requirements.txt pytest
+          PYTHONPATH=backend python3 -m pytest -q tests/test_direct_queue.py
+          bash -n salad-worker/start.sh
+
       - name: Free runner disk space
         shell: bash
         run: |
@@ -43,7 +49,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push CHUNKED FP8 Salad worker with Python headers
+      - name: Build and push DIRECT PULL FP8 worker with Python headers
         uses: docker/build-push-action@v6
         with:
           context: ./salad-worker
@@ -53,11 +59,11 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-chunked-v3-pydev
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-direct-v1
           labels: |
             org.opencontainers.image.source=https://github.com/ImanNasrEsfahani/comfyui-controller
 
       - name: Inspect published chunked image
         run: |
           docker buildx imagetools inspect \
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-chunked-v3-pydev
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-direct-v1

@@ -1,112 +1,19 @@
-name: Apply Keep Warm GPU Controls
+name: Legacy Keep Warm Upgrade (retired)
 
-# Intentional manual approval: uploading this workflow does not change app code.
+# Retired after migrating to the direct pull-worker architecture. Keep this
+# workflow as a safe no-op so an accidental manual run CANNOT overwrite the
+# controller with obsolete queue-autoscaler code.
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: apply-keep-warm-controls
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  apply-and-test:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: true
-
-      - name: Check existing source matches the expected code
-        run: python3 scripts/apply-keep-warm.py --check
-
-      - name: Apply guarded, idempotent Keep Warm patch
-        run: python3 scripts/apply-keep-warm.py --apply
-
-      - name: Verify Python syntax and diff hygiene
+      - name: Legacy upgrade is disabled
         run: |
-          python3 -m py_compile backend/app/main.py backend/app/salad_control.py
-          git diff --check
-
-      - name: Offline Salad control regression checks
-        run: |
-          python3 -m pip install -q httpx
-          python3 - <<'PY'
-          import os, sys
-          from pathlib import Path
-          from unittest.mock import patch
-          for raw in Path('.env.example').read_text().splitlines():
-              line = raw.strip()
-              if line and not line.startswith('#') and '=' in line:
-                  key, value = line.split('=', 1)
-                  os.environ[key] = value.strip().strip('"')
-          os.environ.update({
-              'SALAD_API_KEY': 'FAKE_TEST_TOKEN',
-              'R2_ENDPOINT_URL': 'https://example.invalid',
-              'R2_ACCESS_KEY_ID': 'FAKE_TEST_KEY',
-              'R2_SECRET_ACCESS_KEY': 'FAKE_TEST_SECRET',
-          })
-          sys.path.insert(0, str(Path('backend').resolve()))
-          from app import salad_control as sc
-          def group(minimum=0, pending=False, state='running'):
-              return {
-                  'pending_change': pending,
-                  'current_state': {'status': state},
-                  'queue_autoscaler': {
-                      'min_replicas': minimum, 'max_replicas': 1,
-                      'desired_queue_length': 1, 'polling_period': 30,
-                      'max_upscale_per_minute': 1, 'max_downscale_per_minute': 1,
-                  },
-              }
-          with patch.object(sc, 'request', side_effect=[group(0), {}]) as request:
-              result = sc.set_keep_warm(True)
-              assert result['accepted'] is True
-              assert request.call_args_list[1].args[0] == 'PATCH'
-              patch_body = request.call_args_list[1].kwargs['json_body']
-              assert patch_body['queue_autoscaler']['min_replicas'] == 1
-              assert patch_body['queue_autoscaler']['max_replicas'] == 1
-          with patch.object(sc, 'request', side_effect=[group(1), {}]) as request:
-              result = sc.set_keep_warm(False)
-              assert result['accepted'] is True
-              assert request.call_args_list[1].kwargs['json_body']['queue_autoscaler']['min_replicas'] == 0
-          with patch.object(sc, 'request', return_value=group(1)) as request:
-              try:
-                  sc.stop()
-                  raise AssertionError('Stop should be blocked in Keep Warm mode')
-              except ValueError:
-                  pass
-              assert request.call_count == 1
-          with patch.object(sc, 'request', return_value=group(0, pending=True)) as request:
-              try:
-                  sc.set_keep_warm(True)
-                  raise AssertionError('Pending update should block toggling')
-              except ValueError:
-                  pass
-              assert request.call_count == 1
-          with patch.object(sc, 'request', return_value=group(1)) as request:
-              assert sc.set_keep_warm(True)['accepted'] is False
-              assert request.call_count == 1
-          print('PASS: enable, disable, single-GPU limit, safety guards, idempotence')
-          PY
-
-      - name: Install frontend dependencies and build
-        run: |
-          npm --prefix frontend install --no-audit --no-fund
-          npm --prefix frontend run build
-
-      - name: Create GitHub commit only after tests pass
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/app/salad_control.py backend/app/main.py frontend/src/App.jsx frontend/src/enhancements.css
-          if git diff --cached --quiet; then
-            echo 'Already applied; nothing to commit.'
-          else
-            git commit -m 'feat: add safe GPU Keep Warm editing controls'
-            git push origin HEAD:main
-          fi
+          echo 'Retired: Keep Warm is managed by the direct queue controller.'
+          echo 'Do not run scripts/apply-keep-warm.py on the direct branch.'
