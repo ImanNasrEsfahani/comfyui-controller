@@ -2,7 +2,6 @@ name: Build Salad GPU Worker
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -18,13 +17,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # The baked image contains ~30 GB of Qwen safetensors. GitHub-hosted
-      # runners ship with large SDKs we do not need; remove them before BuildKit.
       - name: Free runner disk space
         shell: bash
         run: |
@@ -47,7 +43,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push baked FP8 Salad worker
+      - name: Build and push CHUNKED FP8 Salad worker
         uses: docker/build-push-action@v6
         with:
           context: ./salad-worker
@@ -56,16 +52,12 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          build-args: |
-            MODEL_PROFILE=fp8
           tags: |
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:latest
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-chunked-v1
           labels: |
             org.opencontainers.image.source=https://github.com/ImanNasrEsfahani/comfyui-controller
 
-      - name: Show published image
+      - name: Inspect published chunked image
         run: |
           docker buildx imagetools inspect \
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-baked
+            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-chunked-v1
