@@ -64,7 +64,7 @@ def test_real_progress_is_attempt_fenced_ordered_and_not_job_completion():
         assert api.post("/api/worker/progress/progress-job", json=older, headers=worker_headers()).status_code == 409
         invalid = {**event, "sequence": 5, "value": 31}
         assert api.post("/api/worker/progress/progress-job", json=invalid, headers=worker_headers()).status_code == 409
-        current = api.get("/api/jobs/progress-job").json()
+        current = api.get("/api/jobs/progress-job", headers=admin_headers()).json()
     assert current["state"] == "running"
     assert current["progress"]["value"] == 12
     assert current["progress"]["total"] == 30
@@ -108,7 +108,7 @@ def test_queued_cancel_is_final_and_active_cancel_waits_for_worker_confirmation(
             json={"lease_token": claim["lease_token"], "attempt_id": claim["attempt_id"]},
             headers=worker_headers())
         assert confirmed.status_code == 200
-        assert api.get("/api/jobs/active-cancel").json()["state"] == "cancelled"
+        assert api.get("/api/jobs/active-cancel", headers=admin_headers()).json()["state"] == "cancelled"
 
 
 def test_completion_that_wins_cancel_race_keeps_verified_job_result():
@@ -143,11 +143,11 @@ def test_history_paginates_with_stable_cursor_and_exact_failed_filter():
         conn.execute("UPDATE jobs SET state='failed' WHERE id='history-a'")
         conn.execute("UPDATE jobs SET state='submit_failed' WHERE id='history-b'")
     with TestClient(controller.app) as api:
-        first = api.get("/api/jobs/history", params={"limit": 1}).json()
-        second = api.get("/api/jobs/history", params={"limit": 1, "cursor": first["next_cursor"]}).json()
-        failed = api.get("/api/jobs/history", params={"state": "failed"}).json()
-        searched = api.get("/api/jobs/history", params={"q": "mountain"}).json()
-        wrong_cursor = api.get("/api/jobs/history", params={"state": "failed", "cursor": first["next_cursor"]})
+        first = api.get("/api/jobs/history", params={"limit": 1}, headers=admin_headers()).json()
+        second = api.get("/api/jobs/history", params={"limit": 1, "cursor": first["next_cursor"]}, headers=admin_headers()).json()
+        failed = api.get("/api/jobs/history", params={"state": "failed"}, headers=admin_headers()).json()
+        searched = api.get("/api/jobs/history", params={"q": "mountain"}, headers=admin_headers()).json()
+        wrong_cursor = api.get("/api/jobs/history", params={"state": "failed", "cursor": first["next_cursor"]}, headers=admin_headers())
     assert [item["id"] for item in first["items"] + second["items"]] == ["history-c", "history-b"]
     assert [item["id"] for item in failed["items"]] == ["history-a"]
     assert [item["id"] for item in searched["items"]] == ["history-a"]
@@ -165,7 +165,7 @@ def test_comparison_uses_saved_snapshot_and_omits_reference_uris():
     new_job("compare-a", snapshot=first_snapshot)
     new_job("compare-b", snapshot=second_snapshot)
     with TestClient(controller.app) as api:
-        response = api.get("/api/job-comparison", params={"first_id": "compare-a", "second_id": "compare-b"})
+        response = api.get("/api/job-comparison", params={"first_id": "compare-a", "second_id": "compare-b"}, headers=admin_headers())
     assert response.status_code == 200
     data = response.json()
     changed = {item["field"] for item in data["differences"]}

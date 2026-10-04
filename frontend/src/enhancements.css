@@ -239,3 +239,36 @@ button.danger:hover { background: #402020; }
 .settings-fields { display: grid; gap: 10px; margin: 18px 0; }
 .settings-fields input { width: 100%; min-width: 0; }
 .settings-card .button-row { flex-wrap: wrap; }
+
+/* Axis 7: keyboard focus, mixed-direction values, touch targets, and motion preferences. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid #91c8ff;
+  outline-offset: 3px;
+}
+button, select, input:not([type="checkbox"]):not([type="radio"]), summary { min-height: 44px; }
+button.link-button { min-width: 44px; min-height: 44px; }
+.mono, code {
+  max-width: 100%;
+  direction: ltr;
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
+input[dir="auto"], textarea[dir="auto"] { text-align: start; }
+main, header, section, article, .card, .job-card { min-width: 0; }
+
+@media (max-width: 520px) {
+  main { width: calc(100% - 24px); padding-top: 24px; padding-bottom: 52px; }
+  .card { padding: 16px; border-radius: 14px; }
+  .page-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page-tabs button { min-width: 0; padding-inline: 8px; }
+  .comparison-scroll { max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

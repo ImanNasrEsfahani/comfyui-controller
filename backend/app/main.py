@@ -90,7 +90,7 @@ def check_internal_token(x_internal_token: str | None):
 
 def check_admin_token(x_internal_token: str | None):
     if not settings.internal_token:
-        raise HTTPException(503, "Set APP_INTERNAL_TOKEN in the private server .env before enabling administrative actions")
+        raise HTTPException(503, "Set APP_INTERNAL_TOKEN in the private server .env before enabling controller data or administrative access")
     check_internal_token(x_internal_token)
 
 
@@ -164,7 +164,8 @@ def workflow_catalog():
 
 
 @app.get("/api/workflows/{workflow_id}")
-def workflow(workflow_id: str):
+def workflow(workflow_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     item = db.get_workflow(workflow_id)
     if not item:
         raise HTTPException(404, "workflow not found")
@@ -173,7 +174,7 @@ def workflow(workflow_id: str):
 
 @app.put("/api/workflows/{workflow_id}")
 def put_workflow(workflow_id: str, body: WorkflowIn, x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
+    check_admin_token(x_internal_token)
     if workflow_id != body.id:
         raise HTTPException(400, "path id and body id must match")
     if "nodes" in body.api_prompt or "last_node_id" in body.api_prompt:
@@ -190,13 +191,13 @@ def put_workflow(workflow_id: str, body: WorkflowIn, x_internal_token: str | Non
 
 @app.delete("/api/workflows/{workflow_id}", status_code=204)
 def remove_workflow(workflow_id: str, x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
+    check_admin_token(x_internal_token)
     db.delete_workflow(workflow_id)
 
 
 @app.post("/api/uploads")
 def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
+    check_admin_token(x_internal_token)
     upload_id = str(uuid4())
     filename = safe_name(file.filename)
     key = f"inputs/{upload_id}/{filename}"
@@ -247,8 +248,9 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
 
 
 @app.get("/api/jobs/{local_id}/assets/{asset_id}/download")
-def download_asset(local_id: str, asset_id: str):
+def download_asset(local_id: str, asset_id: str, x_internal_token: str | None = Header(default=None)):
     """Issue a short-lived private download URL only for this Job's verified Asset."""
+    check_admin_token(x_internal_token)
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
@@ -399,7 +401,7 @@ def apply_provider_result(item, state, output):
 
 @app.post("/api/jobs")
 def create_job(body: JobIn, x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
+    check_admin_token(x_internal_token)
     return public_job(submit_job(body.workflow_id, body.variables, body.priority,
         client_request_id=body.client_request_id, workflow_version=body.workflow_version,
         capability_version=body.capability_version, seed_mode=body.seed_mode,
@@ -408,7 +410,7 @@ def create_job(body: JobIn, x_internal_token: str | None = Header(default=None))
 
 @app.get("/api/job-requests/{client_request_id}")
 def accepted_request(client_request_id: str, x_internal_token: str | None = Header(default=None)):
-    check_internal_token(x_internal_token)
+    check_admin_token(x_internal_token)
     item = db.job_for_request(client_request_id)
     if not item:
         raise HTTPException(404, "No accepted Job was found for this request key")
@@ -477,7 +479,8 @@ def classify_error(state, error):
 
 
 @app.get("/api/jobs")
-def jobs(limit: int = 50):
+def jobs(limit: int = 50, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     return [public_job(note_stale(item)) for item in db.list_jobs(limit)]
 
 
@@ -517,7 +520,9 @@ def _cursor_decode(value, filters):
 @app.get("/api/jobs/history")
 def job_history(limit: int = 24, state: str | None = None, workflow_id: str | None = None,
                 created_after: str | None = None, created_before: str | None = None,
-                q: str | None = None, cursor: str | None = None):
+                q: str | None = None, cursor: str | None = None,
+                x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     states = {"submitting", "pending", "queued", "waiting", "preparing", "processing", "running",
               "finalizing", "cancel_requested", "stalled", "succeeded", "failed", "cancelled", "submit_failed"}
     if not 1 <= limit <= 100:
@@ -573,7 +578,8 @@ def _comparison_snapshot(item):
 
 
 @app.get("/api/job-comparison")
-def compare_jobs(first_id: str, second_id: str):
+def compare_jobs(first_id: str, second_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     if first_id == second_id:
         raise HTTPException(400, "Choose two different Jobs to compare")
     first, second = db.get_job(first_id), db.get_job(second_id)
@@ -587,7 +593,8 @@ def compare_jobs(first_id: str, second_id: str):
 
 
 @app.get("/api/jobs/{local_id}")
-def job(local_id: str):
+def job(local_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
@@ -611,7 +618,8 @@ def job(local_id: str):
 
 
 @app.get("/api/jobs/{local_id}/draft")
-def job_draft(local_id: str):
+def job_draft(local_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
@@ -700,7 +708,8 @@ def hide_job(local_id: str, x_internal_token: str | None = Header(default=None))
 
 
 @app.get("/api/jobs/{local_id}/images")
-def images(local_id: str):
+def images(local_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
         raise HTTPException(404, "job not found")
@@ -737,7 +746,8 @@ def deploy_salad_settings(x_internal_token: str | None = Header(default=None)):
 
 
 @app.get("/api/salad/instances")
-def salad_instances():
+def salad_instances(x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
     try:
         return salad_control.status()
     except Exception as exc:

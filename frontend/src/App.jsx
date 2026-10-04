@@ -4,6 +4,7 @@ import { mergeJob, mergeJobList, appendUniqueJobs, stagePercent, formatDuration,
   isStale, submissionBody, requestId, validateVariables, containsCredentialLikeData } from "./contracts.js";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
+const ACCESS_REQUIRED_MESSAGE = "Private Jobs, uploads, outputs, and infrastructure need controller access. Apply the configured token in Infrastructure & cost; if the server has no token, set APP_INTERNAL_TOKEN in its private .env first.";
 let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
 
 async function api(path, options = {}, tokenOverride = undefined) {
@@ -15,7 +16,7 @@ async function api(path, options = {}, tokenOverride = undefined) {
     const body = await r.text();
     let parsed;
     try { parsed = JSON.parse(body); } catch { parsed = null; }
-    const error = new Error(parsed?.error?.message || `${r.status}: ${body}`);
+    const error = new Error(parsed?.error?.message || `Request failed (HTTP ${r.status})`);
     error.status = r.status;
     error.code = parsed?.error?.code;
     error.path = parsed?.error?.path || (Array.isArray(parsed?.detail) ? parsed.detail[0]?.loc?.join(".") : "");
@@ -276,6 +277,8 @@ export default function App() {
   const jobsPollFailures = useRef(0);
   const nextJobsPollAt = useRef(0);
   const instancesPolling = useRef(false);
+  const instancePollFailures = useRef(0);
+  const nextInstancePollAt = useRef(0);
   const selectionRequest = useRef(0);
   const loadedWorkflow = useRef(null);
   const liveVariables = useRef({});
@@ -417,7 +420,7 @@ export default function App() {
       })
       .catch(e => setMessage(`Unable to load GPU settings: ${e.message}`));
     refreshWorkflows().catch(e => setMessage(e.message));
-    refreshJobs().catch(e => setMessage(e.message));
+    refreshJobs().catch(() => {});
     refreshInstances().catch(() => {});
     try {
       const pending = JSON.parse(sessionStorage.getItem("comfyui-controller:pending-request") || "null");
@@ -431,15 +434,22 @@ export default function App() {
       if (document.visibilityState === "visible") refreshJobs().catch(() => {});
     }, 6000);
     const instanceTimer = setInterval(() => {
-      refreshInstances().catch(() => {});
+      if (document.visibilityState === "visible") refreshInstances().catch(() => {});
     }, 10000);
-    const clockTimer = setInterval(() => setClock(Date.now()), 1000);
-    const onOnline = () => { setBrowserConnection("checking"); refreshJobs(true).catch(() => {}); };
+    const clockTimer = setInterval(() => {
+      if (document.visibilityState === "visible") setClock(Date.now());
+    }, 1000);
+    const onOnline = () => {
+      setBrowserConnection("checking");
+      refreshJobs(true).catch(() => {});
+      refreshInstances(true).catch(() => {});
+    };
     const onOffline = () => setBrowserConnection("disconnected");
     const onVisible = () => {
       if (document.visibilityState === "visible") {
         setBrowserConnection("checking");
         refreshJobs(true).catch(() => {});
+        refreshInstances(true).catch(() => {});
       }
     };
     window.addEventListener("online", onOnline);
@@ -507,15 +517,20 @@ export default function App() {
     setMessage(`Default preset “${defaultPreset.name}” was applied. Reference images were left empty.`);
   }, [selected, selectedCapabilities?.capability_version, presets, canReorderReferences]);
 
-  async function refreshInstances() {
-    if (instancesPolling.current) return;
+  async function refreshInstances(force = false) {
+    if (instancesPolling.current || (!force && Date.now() < nextInstancePollAt.current)) return;
     instancesPolling.current = true;
     try {
       const data = await api("/salad/instances");
       setInstanceInfo(previous => previous?.group_name === data.group_name && previous.version > data.version ? previous : data);
       setInstanceError("");
+      instancePollFailures.current = 0;
+      nextInstancePollAt.current = 0;
     } catch (e) {
-      setInstanceError(e.message);
+      instancePollFailures.current += 1;
+      nextInstancePollAt.current = Date.now() + Math.min(60000, 10000 * (2 ** Math.min(3, instancePollFailures.current - 1)));
+      if (e.status) setBrowserConnection("connected");
+      setInstanceError(e.status === 401 || e.status === 403 || e.status === 503 ? ACCESS_REQUIRED_MESSAGE : e.message);
     } finally {
       instancesPolling.current = false;
     }
@@ -574,8 +589,8 @@ export default function App() {
       setTokenStatus("connected");
       setTokenFeedback("Connected. The verified token is held in memory for this tab only.");
       setMessage("Admin token verified and applied for this browser tab.");
-      refreshJobs().catch(() => {});
-      refreshInstances().catch(() => {});
+      refreshJobs(true).catch(() => {});
+      refreshInstances(true).catch(() => {});
       if (activePage === "settings") refreshDeploymentSettings();
       if (pendingSubmission.current) recoverSubmission();
     } catch (error) {
@@ -933,7 +948,10 @@ export default function App() {
     } catch (error) {
       jobsPollFailures.current += 1;
       nextJobsPollAt.current = Date.now() + Math.min(60000, 6000 * (2 ** Math.min(4, jobsPollFailures.current - 1)));
-      setBrowserConnection("disconnected");
+      setBrowserConnection(error.status ? "connected" : "disconnected");
+      if (error.status === 401 || error.status === 403 || error.status === 503) {
+        setMessage(ACCESS_REQUIRED_MESSAGE);
+      }
       throw error;
     } finally {
       jobsPolling.current = false;
@@ -964,7 +982,11 @@ export default function App() {
       setHistoryCursor(page.next_cursor || null);
       setLastJobsSync(Date.now());
     } catch (error) {
-      if (generation === historyGeneration.current) setHistoryError(error.message);
+      if (generation === historyGeneration.current) {
+        if (error.status) setBrowserConnection("connected");
+        setHistoryError(error.status === 401 || error.status === 403 || error.status === 503
+          ? ACCESS_REQUIRED_MESSAGE : error.message);
+      }
     } finally {
       historyBusy.current = false;
       setHistoryLoading(false);
@@ -1423,8 +1445,8 @@ export default function App() {
   }
 
   async function recoverSubmission(resend = true) {
-    if (adminConfigured && !sessionToken) {
-      setMessage("Apply the admin token before recovering the saved request.");
+    if (!adminConfigured || !sessionToken) {
+      setMessage(ACCESS_REQUIRED_MESSAGE);
       return;
     }
     if (submitting.current || !pendingSubmission.current) return;
@@ -1459,8 +1481,8 @@ export default function App() {
       setMessage("Wait for the selected workflow to finish loading.");
       return;
     }
-    if (adminConfigured && !tokenApplied) {
-      setMessage("Apply a valid admin token in Infrastructure & cost before generating.");
+    if (!adminConfigured || !tokenApplied) {
+      setMessage(ACCESS_REQUIRED_MESSAGE);
       return;
     }
     if (!priority) {
@@ -1581,7 +1603,7 @@ export default function App() {
             <h2>Salad GPU instances</h2>
             <p className="hint">Live status updates every 10 seconds. Stop affects the entire single-worker Container Group.</p>
           </div>
-          <button className="ghost" onClick={() => refreshInstances()}>Refresh instances</button>
+          <button className="ghost" onClick={() => refreshInstances(true)}>Refresh instances</button>
         </div>
         {instanceError && <p className="validation">Instance status unavailable: {instanceError}</p>}
         {instanceInfo ? (
@@ -1857,6 +1879,7 @@ export default function App() {
                 moveDown: () => moveReference(key, 1)
               } : null}
               disabled={seedMode === "random" && key === selectedCapabilities?.seed_variable}
+              uploadDisabled={!adminConfigured || !tokenApplied}
               uploadedName={uploadedNames[key]}
               uploading={Boolean(uploadingKey)}
               isUploading={uploadingKey === key}
@@ -1887,6 +1910,7 @@ export default function App() {
                 <VariableField key={`${key}:${formRevision}`} variableKey={key} value={variables[key]}
                   definition={fieldByKey.get(key)} reference={referenceByKey.get(key)}
                   disabled={seedMode === "random" && key === selectedCapabilities?.seed_variable}
+                  uploadDisabled={!adminConfigured || !tokenApplied}
                   uploadedName={uploadedNames[key]} uploading={Boolean(uploadingKey)} isUploading={uploadingKey === key}
                   error={fieldErrors[key]} onFieldRef={captureFieldRef} onChange={updateVariable}
                   onUpload={uploadFile} onClearUpload={clearUpload} onRandomizeSeed={randomizeSeed} onPastePrompt={pastePrompt} />
@@ -1951,7 +1975,7 @@ export default function App() {
           <p className="hint">
             {priority ? `${priority}${gpuName ? ` · ${gpuName}` : ""}` : "Loading server GPU settings..."}
           </p>
-          {adminConfigured && !tokenApplied && <p className="validation">Apply a valid token in Infrastructure &amp; cost before running a Job.</p>}
+          {(!adminConfigured || !tokenApplied) && <p className="validation">{ACCESS_REQUIRED_MESSAGE}</p>}
 
           {missingImages.length > 0 && selected && (
             <p className="validation">
@@ -1965,7 +1989,7 @@ export default function App() {
           <div className="generate-actions">
             <button
               className="primary"
-              disabled={busy || workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || (adminConfigured && !tokenApplied)}
+              disabled={busy || workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || !adminConfigured || !tokenApplied}
               onClick={run}
               aria-busy={busy}
               title={busy ? "Request is being submitted" : submissionUncertain ? "Recover the saved request first" : ""}
@@ -1976,13 +2000,13 @@ export default function App() {
               Clear Form
             </button>
           </div>
-          {(workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || (adminConfigured && !tokenApplied)) && (
+          {(workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || !adminConfigured || !tokenApplied) && (
             <p className="hint generate-reason" role="status">
-              {workflowLoading ? "Loading workflow…" : adminConfigured && !tokenApplied ? (submissionUncertain ? "Apply the admin token to recover the previous request." : "Apply the admin token to enable Generate.") : submissionUncertain ? "Recover the previous request before generating." : uploadingKey ? "Wait for the image upload to finish." : !selected ? "Choose a workflow to enable Generate." : missingImages.length ? `Required: ${missingImages.map(friendlyLabel).join(", ")}` : Object.keys(fieldErrors).length ? "Correct the highlighted fields to enable Generate." : variablesJsonDirty ? "Apply JSON edits or clear them before generating." : !priority ? "Waiting for GPU configuration." : ""}
+              {workflowLoading ? "Loading workflow…" : !adminConfigured || !tokenApplied ? ACCESS_REQUIRED_MESSAGE : submissionUncertain ? "Recover the previous request before generating." : uploadingKey ? "Wait for the image upload to finish." : !selected ? "Choose a workflow to enable Generate." : missingImages.length ? `Required: ${missingImages.map(friendlyLabel).join(", ")}` : Object.keys(fieldErrors).length ? "Correct the highlighted fields to enable Generate." : variablesJsonDirty ? "Apply JSON edits or clear them before generating." : !priority ? "Waiting for GPU configuration." : ""}
             </p>
           )}
           {currentJobId && <p className="hint" role="status">Current Job: {jobs.find(job => job.id === currentJobId)?.status || "unknown"} · See Jobs &amp; outputs for results.</p>}
-          {submissionUncertain && <button className="ghost" disabled={busy || browserConnection === "checking" || (adminConfigured && !tokenApplied)} onClick={() => recoverSubmission()}>Recover last submission</button>}
+          {submissionUncertain && <button className="ghost" disabled={busy || browserConnection === "checking" || !adminConfigured || !tokenApplied} onClick={() => recoverSubmission()}>Recover last submission</button>}
         </article>
       </section>
 
@@ -2125,7 +2149,7 @@ function TokenControl({ id, value, status, feedback, configured, onChange, onApp
         </button>
       </div>
       <p className="token-status" data-state={status} role="status" aria-live="polite">{feedback}</p>
-      {!configured && <p className="validation">Admin actions are disabled. Set APP_INTERNAL_TOKEN in the private server .env.</p>}
+      {!configured && <p className="validation">Private controller data, uploads, and admin actions are disabled. Set APP_INTERNAL_TOKEN in the private server .env.</p>}
     </div>
   );
 }
@@ -2136,6 +2160,7 @@ function VariableField({
   definition = null,
   labelOverride = "",
   disabled = false,
+  uploadDisabled = false,
   reference = null,
   reorderControl = null,
   uploadedName,
@@ -2170,7 +2195,7 @@ function VariableField({
 
   if (kind === "image") {
     const chooseFile = file => {
-      if (!file) return;
+      if (!file || uploadDisabled) return;
       const url = URL.createObjectURL(file);
       setLocalPreview({ url, file, name: file.name, size: file.size });
       onUpload(variableKey, file);
@@ -2181,14 +2206,14 @@ function VariableField({
       <div className={`field-block image-field${draggingFile ? " is-dragging" : ""}`}
         onDragOver={event => { event.preventDefault(); setDraggingFile(true); }}
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setDraggingFile(false); }}
-        onDrop={event => { event.preventDefault(); setDraggingFile(false); if (!uploading || isUploading) chooseFile(event.dataTransfer.files?.[0]); }}>
+        onDrop={event => { event.preventDefault(); setDraggingFile(false); if (!uploadDisabled && (!uploading || isUploading)) chooseFile(event.dataTransfer.files?.[0]); }}>
         <label htmlFor={fieldId}>{label}</label>
         <input
           id={fieldId}
           type="file"
           ref={element => onFieldRef(variableKey, element)}
           accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
-          disabled={disabled || (uploading && !isUploading)}
+          disabled={disabled || uploadDisabled || (uploading && !isUploading)}
           onChange={e => {
             const file = e.target.files?.[0];
             e.currentTarget.value = "";
@@ -2217,12 +2242,12 @@ function VariableField({
           )}
         </div>
         {isUploading && <progress className="upload-progress" aria-label={`Uploading ${label}; exact progress unavailable`} />}
-        <p className="hint upload-drop-hint">Drop an image here or choose a file. Preview appears locally before upload.</p>
+        <p className="hint upload-drop-hint">{uploadDisabled ? "Apply controller access in Infrastructure & cost before uploading a reference image." : "Drop an image here or choose a file. Preview appears locally before upload."}</p>
         {localPreview && <div className="input-image-preview">
           <img src={localPreview.url} alt={`Local preview of ${localPreview.name}`} />
           <span>{(localPreview.size / 1024 / 1024).toFixed(2)} MB · local preview</span>
         </div>}
-        {error && !isUploading && localPreview && <button type="button" className="ghost upload-retry" onClick={() => onUpload(variableKey, localPreview.file)}>Retry upload</button>}
+        {error && !isUploading && localPreview && <button type="button" className="ghost upload-retry" disabled={uploadDisabled} onClick={() => onUpload(variableKey, localPreview.file)}>Retry upload</button>}
         {help && <p className="hint">{help}</p>}
         {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
@@ -2243,6 +2268,7 @@ function VariableField({
           id={fieldId}
           ref={element => onFieldRef(variableKey, element)}
           className="runtime-textarea"
+          dir="auto"
           value={value ?? ""}
           disabled={disabled}
           onChange={e => onChange(variableKey, e.target.value)}
@@ -2350,6 +2376,7 @@ function VariableField({
         id={fieldId}
         type="text"
         ref={element => onFieldRef(variableKey, element)}
+        dir="auto"
         value={value ?? ""}
         disabled={disabled}
         onChange={e => onChange(variableKey, e.target.value)}
@@ -2527,8 +2554,8 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
         {failureActions[job.error_category] && <span className="hint">{failureActions[job.error_category]}</span>}
       </div>}
       {job.poll_warning && <p className="hint">{job.poll_warning}</p>}
-      <div className="job-stage" aria-live="polite">
-        <strong>{progress?.label || (job.state === "pending" ? "Waiting for a Worker" : jobStateLabel(job.state))}</strong>
+      <div className="job-stage">
+        <strong aria-live="polite">{progress?.label || (job.state === "pending" ? "Waiting for a Worker" : jobStateLabel(job.state))}</strong>
         {progress && percent !== null ? (
           <div className="job-progress-block">
             <div className="job-progress-caption"><span>{progress.label} · stage progress</span><span>{progress.value}/{progress.total} {progress.unit || ""} ({percent}%)</span></div>
@@ -2642,7 +2669,7 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
                 </div>}
               </article>;
             })}
-            {Array.from({ length: expectedTiles }, (_, index) => <div className="output-card output-placeholder" key={`pending:${job.id}:${job.active_attempt_id || "none"}:${index}`} aria-live="polite">
+            {Array.from({ length: expectedTiles }, (_, index) => <div className="output-card output-placeholder" key={`pending:${job.id}:${job.active_attempt_id || "none"}:${index}`}>
               <div className="placeholder-preview"><span aria-hidden="true" /></div>
               <strong>{job.state === "finalizing" ? "Verifying output" : job.state === "pending" || job.state === "queued" ? "Waiting for Worker" : jobStateLabel(job.state)}</strong>
               <small>{progress?.label || "Output will appear here when available"}</small>

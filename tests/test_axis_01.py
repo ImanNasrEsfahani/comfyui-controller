@@ -127,8 +127,8 @@ def test_verified_output_can_be_reused_as_reference_and_download_is_job_scoped(m
     monkeypatch.setattr(storage, "presign_get", lambda storage_key, *args, **kwargs: "https://signed.invalid/download")
     with TestClient(app) as client:
         accepted = client.post("/api/jobs", json=request_body, headers=ADMIN)
-        downloaded = client.get(f"/api/jobs/{source['id']}/assets/verified-output-1/download", follow_redirects=False)
-        wrong_job = client.get(f"/api/jobs/{source['id']}/assets/not-this-asset/download", follow_redirects=False)
+        downloaded = client.get(f"/api/jobs/{source['id']}/assets/verified-output-1/download", headers=ADMIN, follow_redirects=False)
+        wrong_job = client.get(f"/api/jobs/{source['id']}/assets/not-this-asset/download", headers=ADMIN, follow_redirects=False)
     assert accepted.status_code == 200, accepted.text
     reference = accepted.json()["snapshot"]["references"][0]
     assert reference["uri"] == uri and reference["asset_id"] == "verified-output-1" and reference["source_job_id"] == source["id"]
@@ -258,10 +258,10 @@ def test_finalizing_file_validation_partial_success_and_duplicate_callback(monke
     assert db.get_job(job["id"])["version"] == first["version"]
     assert not queue.finish(job["id"], claim["lease_token"], {"overwrite": True})
     with TestClient(app) as client:
-        data = client.get(f"/api/jobs/{job['id']}").json()
+        data = client.get(f"/api/jobs/{job['id']}", headers=ADMIN).json()
         assert data["output_summary"]["partial_success"]
         assert "lease_token_hash" not in json.dumps(data)
-        images = client.get(f"/api/jobs/{job['id']}/images").json()
+        images = client.get(f"/api/jobs/{job['id']}/images", headers=ADMIN).json()
         assert len(images["images"]) == 1 and len(images["assets"]) == 2
         assert images["images"][0]["width"] == 512
     assert [event["state"] for event in first["timeline"]] == ["pending", "running", "finalizing", "succeeded"]
@@ -379,7 +379,7 @@ def test_new_salad_queue_attempt_snapshot_and_verified_completion(monkeypatch):
     assert accepted["active_attempt_id"]
     monkeypatch.setattr(main.salad, "get_job", lambda *args: {"status": "succeeded", "output": {"image": f"s3://{settings.r2_bucket}/outputs/{accepted['id']}/result.png"}})
     with TestClient(app) as client:
-        completed = client.get(f"/api/jobs/{accepted['id']}")
+        completed = client.get(f"/api/jobs/{accepted['id']}", headers=ADMIN)
     assert completed.status_code == 200, completed.text
     result = completed.json()
     assert result["state"] == "succeeded" and result["assets"][0]["attempt_id"] == result["active_attempt_id"]
@@ -453,4 +453,39 @@ def test_new_provider_retry_wait_clock_belongs_to_latest_attempt(monkeypatch):
     with TestClient(app) as client:
         retried = client.post(f"/api/jobs/{job['id']}/retry", headers=ADMIN, json={})
         assert retried.status_code == 200
-        assert client.get("/api/jobs").json()[0]["state"] == "pending"
+        assert client.get("/api/jobs", headers=ADMIN).json()[0]["state"] == "pending"
+
+
+def test_private_job_media_upload_workflow_and_infrastructure_routes_require_admin_access():
+    with TestClient(app) as client:
+        private_reads = [
+            ("/api/jobs", {}),
+            ("/api/jobs/history", {}),
+            ("/api/jobs/private-job", {}),
+            ("/api/jobs/private-job/draft", {}),
+            ("/api/jobs/private-job/images", {}),
+            ("/api/jobs/private-job/assets/private-asset/download", {}),
+            ("/api/job-comparison?first_id=one&second_id=two", {}),
+            ("/api/job-requests/private-request", {}),
+            ("/api/workflows/wf", {}),
+            ("/api/salad/instances", {}),
+        ]
+        for path, _ in private_reads:
+            assert client.get(path).status_code == 401, path
+
+        assert client.post("/api/jobs", json=request()).status_code == 401
+        assert client.post("/api/uploads", files={"file": ("input.png", _png_bytes(), "image/png")}).status_code == 401
+        assert client.get("/api/jobs", headers=ADMIN).status_code == 200
+
+
+def test_private_routes_fail_closed_when_admin_token_is_not_configured(monkeypatch):
+    original_token = settings.internal_token
+    monkeypatch.setenv("DIRECT_QUEUE_ENABLED", "false")
+    object.__setattr__(settings, "internal_token", "")
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/jobs")
+        assert response.status_code == 503
+        assert "APP_INTERNAL_TOKEN" in response.json()["error"]["message"]
+    finally:
+        object.__setattr__(settings, "internal_token", original_token)
