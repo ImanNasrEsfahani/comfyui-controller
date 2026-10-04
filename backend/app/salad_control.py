@@ -9,7 +9,7 @@ import re
 import time
 import threading
 from uuid import uuid4
-from . import settings_store, db, direct_queue
+from . import settings_store, db, direct_queue, instance_contract
 from .config import settings
 from . import salad
 
@@ -30,6 +30,8 @@ def request(method, suffix="", *, json_body=None):
 
 
 def status():
+    configured_group = settings.salad_group_name
+    version, observed_at = instance_contract.begin(configured_group)
     group = request("GET")
     response = request("GET", "/instances")
     instances = response.get("instances", []) if isinstance(response, dict) else response
@@ -37,14 +39,16 @@ def status():
         instances = []
     state = group.get("current_state") or {}
     is_direct = direct_queue.enabled()
-    return {
+    if settings.salad_group_name != configured_group:
+        raise ValueError("Active group changed during observation; refresh its status")
+    result = {
         "queue_mode": "direct" if is_direct else "salad_queue",
         "auto_gpu_control": os.getenv("DIRECT_GPU_AUTO_CONTROL", "false").lower() == "true" if is_direct else None,
         "hold": direct_queue.load_setting("direct_hold", False) if is_direct else False,
-        "name": group.get("name"),
+        "name": group.get("name") or configured_group,
         "status": state.get("status"),
         "pending_change": bool(group.get("pending_change")),
-        "replicas": group.get("replicas", 0),
+        "replicas": group.get("replicas"),
         "counts": state.get("instance_status_counts") or {},
         "autoscaler_enabled": bool(group.get("queue_autoscaler")),
         "keep_warm": bool(direct_queue.load_setting("direct_keep_warm", False)) if is_direct else (group.get("queue_autoscaler") or {}).get("min_replicas") == 1,
@@ -53,11 +57,12 @@ def status():
         "instances": [{
             "id": item.get("id"),
             "state": item.get("state"),
-            "ready": item.get("ready", False),
+            "ready": item.get("ready"),
             "pulling_progress": item.get("pulling_progress"),
             "update_time": item.get("update_time"),
         } for item in instances if isinstance(item, dict)],
     }
+    return instance_contract.record(result, version, observed_at)
 
 
 def stop():

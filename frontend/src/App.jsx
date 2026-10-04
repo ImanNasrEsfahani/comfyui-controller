@@ -1,5 +1,6 @@
 import "./enhancements.css";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { mergeJob, mergeJobList, isStale, submissionBody, requestId } from "./contracts.js";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
 let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
@@ -10,7 +11,12 @@ async function api(path, options = {}) {
   const r = await fetch(`${API}${path}`, { ...options, headers });
   if (!r.ok) {
     const body = await r.text();
-    throw new Error(`${r.status}: ${body}`);
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { parsed = null; }
+    const error = new Error(parsed?.error?.message || `${r.status}: ${body}`);
+    error.status = r.status;
+    error.code = parsed?.error?.code;
+    throw error;
   }
   if (r.status === 204) return null;
   return r.json();
@@ -181,6 +187,20 @@ function saveLocalVariables(workflowId, variables) {
 }
 
 export default function App() {
+  const jobsPolling = useRef(false);
+  const jobsGeneration = useRef(0);
+  const instancesPolling = useRef(false);
+  const selectionRequest = useRef(0);
+  const loadedWorkflow = useRef(null);
+  const liveVariables = useRef({});
+  const submitting = useRef(false);
+  const pendingSubmission = useRef(null);
+  const sourceJob = useRef(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [submissionUncertain, setSubmissionUncertain] = useState(false);
+  const [browserConnection, setBrowserConnection] = useState("checking");
+  const [clock, setClock] = useState(Date.now());
+  const [currentJobId, setCurrentJobId] = useState(null);
   const [workflows, setWorkflows] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [workflowId, setWorkflowId] = useState("");
@@ -208,6 +228,7 @@ export default function App() {
   const [variablesDraft, setVariablesDraft] = useState(
     JSON.stringify({ "input.image_1": "" }, null, 2)
   );
+  liveVariables.current = variables;
 
   const placeholderKeys = useMemo(() => {
     try {
@@ -244,11 +265,20 @@ export default function App() {
         setPriority(data.default_priority);
         setGpuName(data.gpu_name || "");
         setAdminConfigured(Boolean(data.admin_configured));
+        setBrowserConnection("connected");
       })
       .catch(e => setMessage(`Unable to load GPU settings: ${e.message}`));
     refreshWorkflows().catch(e => setMessage(e.message));
     refreshJobs().catch(e => setMessage(e.message));
     refreshInstances().catch(() => {});
+    try {
+      const pending = JSON.parse(sessionStorage.getItem("comfyui-controller:pending-request") || "null");
+      if (pending?.client_request_id) {
+        pendingSubmission.current = pending;
+        setSubmissionUncertain(true);
+        recoverSubmission(false);
+      }
+    } catch { /* Session storage is optional. */ }
 
     const jobsTimer = setInterval(() => {
       refreshJobs().catch(() => {});
@@ -256,9 +286,11 @@ export default function App() {
     const instanceTimer = setInterval(() => {
       refreshInstances().catch(() => {});
     }, 10000);
+    const clockTimer = setInterval(() => setClock(Date.now()), 1000);
     return () => {
       clearInterval(jobsTimer);
       clearInterval(instanceTimer);
+      clearInterval(clockTimer);
     };
   }, []);
 
@@ -276,12 +308,16 @@ export default function App() {
   }, [variables, selected]);
 
   async function refreshInstances() {
+    if (instancesPolling.current) return;
+    instancesPolling.current = true;
     try {
       const data = await api("/salad/instances");
-      setInstanceInfo(data);
+      setInstanceInfo(previous => previous?.group_name === data.group_name && previous.version > data.version ? previous : data);
       setInstanceError("");
     } catch (e) {
       setInstanceError(e.message);
+    } finally {
+      instancesPolling.current = false;
     }
   }
 
@@ -381,7 +417,7 @@ export default function App() {
     setJobBusyId(job.id);
     try {
       const updated = await api(`/jobs/${encodeURIComponent(job.id)}`);
-      setJobs(prev => prev.map(item => item.id === job.id ? updated : item));
+      setJobs(prev => prev.map(item => item.id === job.id ? mergeJob(item, updated) : item));
       setMessage(`Status refreshed: ${updated.state}`);
     } catch (e) {
       setMessage(e.message);
@@ -398,6 +434,7 @@ export default function App() {
     setJobBusyId(job.id);
     try {
       await api(`/jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+      jobsGeneration.current += 1;
       setJobs(previous => previous.filter(item => item.id !== job.id));
       setMessage("Job hidden locally. Any remote Salad job remains unchanged.");
     } catch (e) {
@@ -412,6 +449,7 @@ export default function App() {
     try {
       const draft = await api(`/jobs/${encodeURIComponent(job.id)}/draft`);
       await loadWorkflow(draft.workflow_id, draft.variables);
+      sourceJob.current = job.id;
       setMessage(draft.warning || "Job inputs restored. Edit the prompt and run when ready.");
       document.getElementById("inputs-run")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
@@ -425,7 +463,7 @@ export default function App() {
     const mayStillRun = job.state === "stalled" || job.state === "submit_failed";
     const warning = mayStillRun
       ? "The original remote job may STILL EXECUTE. Retrying creates a NEW job and could cost twice. Continue?"
-      : "Submit a NEW billable attempt with the previously saved inputs?";
+      : "Retry the saved Job with a new billable execution attempt?";
     if (!window.confirm(warning)) return;
     setJobBusyId(job.id);
     try {
@@ -434,7 +472,9 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ allow_duplicate: mayStillRun })
       });
-      setMessage(`New attempt submitted: ${output.id}`);
+      jobsGeneration.current += 1;
+      setJobs(previous => previous.map(item => item.id === output.id ? mergeJob(item, output) : item));
+      setMessage(`Retry accepted: ${output.id}`);
       await refreshJobs();
     } catch (e) {
       setMessage(e.message);
@@ -463,13 +503,18 @@ export default function App() {
   }
 
   async function refreshJobs(allPending = false) {
+    if (jobsPolling.current) return;
+    jobsPolling.current = true;
+    const generation = jobsGeneration.current;
+    try {
     const list = await api("/jobs?limit=30");
     const pending = list
       .filter(job => !TERMINAL_STATES.has(job.state))
       .slice(0, allPending === true ? 30 : 10);
 
     if (pending.length === 0) {
-      setJobs(list);
+      if (generation === jobsGeneration.current) setJobs(previous => mergeJobList(previous, list));
+      setBrowserConnection("connected");
       return;
     }
 
@@ -484,10 +529,18 @@ export default function App() {
     );
 
     const byId = new Map(refreshed.map(job => [job.id, job]));
-    setJobs(list.map(job => byId.get(job.id) || job));
+    if (generation === jobsGeneration.current) setJobs(previous => mergeJobList(previous, list.map(job => byId.get(job.id) || job)));
+    setBrowserConnection("connected");
+    } catch (error) {
+      setBrowserConnection("disconnected");
+      throw error;
+    } finally {
+      jobsPolling.current = false;
+    }
   }
 
   function updateVariable(key, value) {
+    liveVariables.current = { ...liveVariables.current, [key]: value };
     setVariables(prev => ({ ...prev, [key]: value }));
   }
 
@@ -522,6 +575,7 @@ export default function App() {
       saveLocalVariables(id, nextVariables);
 
       await refreshWorkflows();
+      await loadWorkflow(id, nextVariables);
       setMessage(`Workflow saved. ${keys.length} runtime variable(s) detected.`);
     } catch (e) {
       setMessage(e.message);
@@ -531,12 +585,17 @@ export default function App() {
   }
 
   async function loadWorkflow(id, restoredVariables = null) {
+    const request = ++selectionRequest.current;
+    loadedWorkflow.current = null;
+    sourceJob.current = null;
+    setWorkflowLoading(Boolean(id));
     setSelected(id);
     setUploadedNames({});
     if (!id) return;
 
     try {
       const w = await api(`/workflows/${encodeURIComponent(id)}`);
+      if (request !== selectionRequest.current) return;
       const json = JSON.stringify(w.api_prompt, null, 2);
       const keys = extractPlaceholders(w.api_prompt);
       const nextVariables = restoredVariables === null
@@ -547,6 +606,8 @@ export default function App() {
       setWorkflowName(w.name);
       setWorkflowJson(json);
       setVariables(nextVariables);
+      liveVariables.current = nextVariables;
+      loadedWorkflow.current = w;
       setVariablesDraft(JSON.stringify(nextVariables, null, 2));
       if (restoredVariables !== null) {
         const names = {};
@@ -558,7 +619,9 @@ export default function App() {
         setUploadedNames(names);
       }
     } catch (e) {
-      setMessage(e.message);
+      if (request === selectionRequest.current) setMessage(e.message);
+    } finally {
+      if (request === selectionRequest.current) setWorkflowLoading(false);
     }
   }
 
@@ -566,12 +629,14 @@ export default function App() {
     if (!file) return;
 
     setUploadingKey(key);
+    const selection = selectionRequest.current;
     setMessage(`Uploading ${friendlyLabel(key)}...`);
 
     try {
       const form = new FormData();
       form.append("file", file);
       const out = await api("/uploads", { method: "POST", body: form });
+      if (selection !== selectionRequest.current) return;
 
       // A stable URI survives R2 signature expiry; the backend signs it for each run.
       updateVariable(key, out.s3_uri);
@@ -598,6 +663,7 @@ export default function App() {
       const parsed = JSON.parse(variablesDraft || "{}");
       const next = normalizeVariables(placeholderKeys, parsed);
       setVariables(next);
+      liveVariables.current = next;
       setVariablesDraft(JSON.stringify(next, null, 2));
       setMessage("Variables JSON applied.");
     } catch (e) {
@@ -608,12 +674,52 @@ export default function App() {
   function resetVariables() {
     const next = normalizeVariables(placeholderKeys);
     setVariables(next);
+    liveVariables.current = next;
     setUploadedNames({});
     setVariablesDraft(JSON.stringify(next, null, 2));
     setMessage("Runtime variables reset to defaults.");
   }
 
+  function rememberSubmission(body) {
+    pendingSubmission.current = body;
+    try { sessionStorage.setItem("comfyui-controller:pending-request", JSON.stringify(body)); } catch { /* Optional. */ }
+  }
+
+  function submissionAccepted(out) {
+    pendingSubmission.current = null;
+    try { sessionStorage.removeItem("comfyui-controller:pending-request"); } catch { /* Optional. */ }
+    setSubmissionUncertain(false);
+    setCurrentJobId(out.id);
+    jobsGeneration.current += 1;
+    setJobs(previous => [mergeJob(previous.find(job => job.id === out.id), out), ...previous.filter(job => job.id !== out.id)]);
+    setMessage(`Accepted: ${out.id} · ${out.status || out.state}. Output appears in Jobs & outputs after completion.`);
+  }
+
+  async function recoverSubmission(resend = true) {
+    if (submitting.current || !pendingSubmission.current) return;
+    submitting.current = true;
+    setBusy(true);
+    try {
+      let out;
+      try {
+        out = await api(`/job-requests/${encodeURIComponent(pendingSubmission.current.client_request_id)}`);
+      } catch (error) {
+        if (error.status !== 404 || !resend) throw error;
+        out = await api("/jobs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(pendingSubmission.current)});
+      }
+      submissionAccepted(out);
+    } catch (error) {
+      setMessage(`Submission outcome is unknown. Recover the saved request before creating another Job: ${error.message}`);
+      setSubmissionUncertain(true);
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
+
   async function run() {
+    if (submitting.current) return;
+    if (pendingSubmission.current) { await recoverSubmission(); return; }
     if (!selected) {
       setMessage("Choose a workflow first.");
       return;
@@ -625,24 +731,29 @@ export default function App() {
     }
 
     setBusy(true);
+    submitting.current = true;
     setMessage("");
 
     try {
+      const body = submissionBody(loadedWorkflow.current, liveVariables.current, priority, requestId(), sourceJob.current);
+      rememberSubmission(body);
       const out = await api("/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          workflow_id: selected,
-          variables,
-          priority
-        })
+        body: JSON.stringify(body)
       });
 
-      setMessage(`Submitted: ${out.id} · Priority: ${out.priority || priority}`);
+      submissionAccepted(out);
       await refreshJobs();
     } catch (e) {
+      if (e.status && e.status < 500 && (e.status !== 409 || e.code === "workflow_changed")) {
+        pendingSubmission.current = null;
+        try { sessionStorage.removeItem("comfyui-controller:pending-request"); } catch { /* Optional. */ }
+      }
+      setSubmissionUncertain(Boolean(pendingSubmission.current));
       setMessage(e.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -654,25 +765,30 @@ export default function App() {
           <p className="eyebrow">Always-on controller</p>
           <h1>Qwen / ComfyUI</h1>
           <p className="muted">
-            Edit configuration here. GPU compute runs only through the Salad queue.
+            Create and edit with saved workflows. Execution follows the server's configured queue mode.
           </p>
         </div>
-        <div className="status">
+        <div className="status" data-state={browserConnection}>
           <span className="dot"></span>
-          Controller online
+          Browser connection: {browserConnection}
+          <div className="hint">Tool: {selectedName || "none"} · GPU: {instanceInfo?.provider_status || "unknown"}</div>
         </div>
       </header>
 
       {message && <div className="notice" role="status">{message}</div>}
       <nav className="page-tabs" aria-label="Controller pages">
         <button type="button" className={activePage === "editor" ? "tab-active" : "ghost"}
-          onClick={() => setActivePage("editor")}>Editor</button>
+          onClick={() => setActivePage("editor")}>Create &amp; edit</button>
+        <button type="button" className={activePage === "jobs" ? "tab-active" : "ghost"}
+          onClick={() => setActivePage("jobs")}>Jobs &amp; outputs</button>
+        <button type="button" className={activePage === "infrastructure" ? "tab-active" : "ghost"}
+          onClick={() => setActivePage("infrastructure")}>Infrastructure &amp; cost</button>
         <button type="button" className={activePage === "settings" ? "tab-active" : "ghost"}
           onClick={showSettings}>Settings</button>
       </nav>
 
-      {activePage === "editor" ? (<>
-      <section className="card instance-card" aria-label="Salad GPU worker status">
+      {activePage !== "settings" ? (<>
+      <section hidden={activePage !== "infrastructure"} className="card instance-card" aria-label="Salad GPU worker status">
         <div className="row instance-heading">
           <div>
             <h2>Salad GPU instances</h2>
@@ -685,7 +801,7 @@ export default function App() {
           <>
             <div className="instance-summary">
               <span><strong>{instanceInfo.instances?.length ?? 0}</strong> instances</span>
-              <span>Requested: {instanceInfo.replicas ?? 0}</span>
+              <span>Requested: {instanceInfo.replicas ?? "unknown"}</span>
               <span>Group: <strong>{instanceInfo.status || "unknown"}</strong></span>
               <span>{instanceInfo.queue_mode === "direct"
                 ? `Controller: SQLite pull queue · ${instanceInfo.auto_gpu_control ? "auto GPU" : "manual GPU"}`
@@ -703,8 +819,8 @@ export default function App() {
                     <strong>{instance.state || "unknown"}</strong>
                     <div className="mono">{instance.id}</div>
                     <div className="hint">
-                      Ready: {instance.ready ? "yes" : "no"}
-                      {instance.pulling_progress != null ? ` · Pulling ${instance.pulling_progress}%` : ""}
+                      Provider ready: {instance.provider_ready == null ? "unknown" : instance.provider_ready ? "yes" : "no"}
+                      {instance.pull_progress?.value != null ? ` · Image pull value: ${instance.pull_progress.value} (unit unknown)` : ""}
                     </div>
                   </div>
                   <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
@@ -714,6 +830,10 @@ export default function App() {
               ))}
               {!(instanceInfo.instances || []).length && <p className="hint">No allocated instances.</p>}
             </div>
+            <p className="hint">Last observation: {instanceInfo.last_updated_at ? new Date(instanceInfo.last_updated_at).toLocaleString() : "unknown"}
+              {isStale(instanceInfo, clock) || instanceError ? " · Stale data" : " · Recent observation"}</p>
+            <p className="hint">Worker connection: {instanceInfo.worker_status || "unknown"}. Selected-tool readiness: unknown.</p>
+            <p className="hint">Rate, estimated cost, balance and billing: unknown. {instanceInfo.financial?.limitation}</p>
             <div className="button-row">
               {instanceInfo.queue_mode === "direct" && instanceInfo.hold && (
                 <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured}
@@ -771,7 +891,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="grid">
+      <section hidden={activePage !== "editor"} className="grid">
         <article className="card">
           <h2>1. Workflow library</h2>
 
@@ -878,6 +998,7 @@ export default function App() {
           <p className="hint">
             {priority ? `${priority}${gpuName ? ` · ${gpuName}` : ""}` : "Loading server GPU settings..."}
           </p>
+          {adminConfigured && !adminToken && <p className="validation">Enter the browser token in Infrastructure &amp; cost before running a Job.</p>}
 
           {missingImages.length > 0 && selected && (
             <p className="validation">
@@ -887,15 +1008,17 @@ export default function App() {
 
           <button
             className="primary"
-            disabled={busy || Boolean(uploadingKey) || !selected || missingImages.length > 0 || !priority}
+            disabled={busy || workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || !priority}
             onClick={run}
           >
             Run on Salad GPU
           </button>
+          {currentJobId && <p className="hint" role="status">Current Job: {jobs.find(job => job.id === currentJobId)?.status || "unknown"} · See Jobs &amp; outputs for results.</p>}
+          {submissionUncertain && <button className="ghost" disabled={busy} onClick={() => recoverSubmission()}>Recover last submission</button>}
         </article>
       </section>
 
-      <section className="card jobs">
+      <section hidden={activePage !== "jobs"} className="card jobs">
         <div className="row">
           <h2>3. Recent jobs</h2>
           <button className="ghost" onClick={() => refreshJobs(true)}>Refresh all</button>

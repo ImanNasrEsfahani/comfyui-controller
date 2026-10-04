@@ -62,7 +62,7 @@ def keep_lease(job, done, lease_lost):
     path = "/api/worker/heartbeat/" + job["job_id"]
     while not done.wait(HEARTBEAT_SECONDS):
         try:
-            result = request(path, {"lease_token": job["lease_token"]})
+            result = request(path, {"lease_token": job["lease_token"], "attempt_id": job.get("attempt_id")})
             if not result or not result.get("accepted"):
                 lease_lost.set()
                 log("Lease rejected for job " + job["job_id"])
@@ -94,14 +94,22 @@ def work(job):
         # A timeout may happen *after* ComfyUI accepted a job. Do not silently
         # retry an ambiguous execution and incur duplicated GPU/R2 costs.
         error = "ComfyUI execution error: " + type(exc).__name__ + ": " + str(exc)[:250]
+    try:
+        deliver_result(job, response, error, lost)
     finally:
+        # Output validation is part of the active attempt. Renew the lease
+        # until the controller acknowledges finalization, not just compute.
         done.set()
         thread.join(timeout=3)
+
+
+def deliver_result(job, response, error, lost):
+    job_id = job["job_id"]
     if lost.is_set():
         log("Lease expired/revoked; refusing to commit stale job " + job_id)
         return
     path = "/api/worker/" + ("fail/" if error else "complete/") + job_id
-    data = {"lease_token": job["lease_token"]}
+    data = {"lease_token": job["lease_token"], "attempt_id": job.get("attempt_id")}
     if error:
         data.update({"error": error, "retryable": False})
     else:
@@ -110,7 +118,7 @@ def work(job):
         try:
             result = request(path, data)
             if result and result.get("accepted"):
-                log("Job " + job_id + (" failed: " + error if error else " succeeded"))
+                log("Job " + job_id + (" failed: " + error if error else " result committed: " + result.get("state", "accepted")))
             else:
                 log("Completion rejected for job " + job_id)
             return

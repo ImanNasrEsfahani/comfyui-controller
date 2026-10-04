@@ -23,9 +23,11 @@ os.environ.update({
     "R2_ACCESS_KEY_ID": "TEST_ID", "R2_SECRET_ACCESS_KEY": "TEST_SECRET",
     "R2_REGION": "auto", "R2_PRESIGN_TTL_SECONDS": "3600",
     "JOB_STALE_MINUTES": "180",
+    "SALAD_IMAGE": "ghcr.io/test/worker:v1", "SALAD_CONTAINER_GROUP_NAME": "test-group",
+    "SALAD_CONTAINER_GROUP_DISPLAY_NAME": "Test Group",
 })
 from fastapi.testclient import TestClient
-from app import db, salad_control, job_lifecycle, storage
+from app import db, salad_control, job_lifecycle, storage, settings_store
 from app.main import app
 from app.config import settings
 
@@ -37,6 +39,7 @@ class ControllerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         object.__setattr__(settings, "db_path", str(Path(self.tmp.name) / "db.sqlite3"))
         db.init_db()
+        settings_store.seed()
         db.save_workflow("test-wf", "Test workflow", {
             "1": {"inputs": {"image": "{{input.image_1}}", "text": "Prefix: {{prompt.user}}"}}
         })

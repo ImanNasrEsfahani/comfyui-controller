@@ -117,8 +117,14 @@ def test_worker_endpoint_auth_and_local_submit(monkeypatch):
         assert claimed.status_code == 200
         attempt = claimed.json()
         assert attempt["request"]["prompt"]["1"]["inputs"]["image"] == "s3://comfy/inputs/a/a.png"
+        class OutputStore:
+            def head_object(self, **kwargs):
+                return {"ContentLength": 128, "ContentType": "image/png"}
+        monkeypatch.setattr(storage, "client", lambda: OutputStore())
+        monkeypatch.setattr(storage, "presign_get", lambda key: "https://example.invalid/" + key)
+        output_uri = f"s3://{settings.r2_bucket}/{attempt['request']['s3']['prefix']}result.png"
         done = api.post(f"/api/worker/complete/{result['id']}",
-                        json={"lease_token": attempt["lease_token"], "output": {"images": []}}, headers=headers)
+                        json={"lease_token": attempt["lease_token"], "attempt_id": attempt["attempt_id"], "output": {"images": [output_uri]}}, headers=headers)
         assert done.status_code == 200
         assert api.get(f"/api/jobs/{result['id']}").json()["state"] == "succeeded"
 

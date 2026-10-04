@@ -1,4 +1,9 @@
 /* Job and instance controls: additive to the existing styles.css. */
+[hidden] { display: none !important; }
+.page-tabs { flex-wrap: wrap; }
+.card, .job-top > div, .instance-item > div { min-width: 0; overflow-wrap: anywhere; }
+.status { white-space: normal; }
+.status[data-state="disconnected"] .dot { background: #f0bd7a; }
 .instance-card { margin-bottom: 18px; }
 .instance-heading { gap: 16px; align-items: flex-start; }
 .instance-heading h2 { margin-bottom: 5px; }
