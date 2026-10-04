@@ -46,10 +46,14 @@ def tick():
     if queue.load_setting("direct_hold", False):
         # A failed stop is retried, but HOLD must never trigger a replacement.
         group = _safe_group()
+        salad_control.status(group_data=group)
         if not group.get("pending_change") and (group.get("current_state") or {}).get("status") != "stopped":
-            salad_control.request("POST", "/stop")
+            salad_control.stop(source="scheduler_hold", hold_shutdown=True)
         return
     group = _safe_group()
+    # Reconcile any in-flight controller operation from provider observations;
+    # scheduler progress must not depend on an open browser dashboard.
+    salad_control.status(group_data=group)
     if group.get("pending_change"):
         return
     now = time.time()
@@ -69,20 +73,20 @@ def tick():
         queue.save_setting("direct_hold", reason)
         log.error("%s; HOLD activated. Manual reset required", reason)
         if state != "stopped":
-            salad_control.request("POST", "/stop")
+            salad_control.stop(source="scheduler_hold", hold_shutdown=True)
         return
     if demand:
         queue.save_setting("direct_last_demand", now)
         if state == "stopped":
             if desired != 0:
                 # Group stop does not guarantee its replica target was reset.
-                salad_control.request("PATCH", json_body={"replicas": 0})
+                salad_control.set_replicas(0, source="scheduler")
                 return
-            salad_control.request("POST", "/start")
+            salad_control.start(source="scheduler")
             log.info("Starting idle Salad container group")
             return
         if desired == 0:
-            salad_control.request("PATCH", json_body={"replicas": 1})
+            salad_control.set_replicas(1, source="scheduler")
             queue.save_setting("direct_boot_started", now)
             log.info("Requested exactly one GPU replica")
         return
@@ -97,11 +101,11 @@ def tick():
     if now - last_demand < idle:
         return
     if desired > 0:
-        salad_control.request("PATCH", json_body={"replicas": 0})
+        salad_control.set_replicas(0, source="scheduler")
         queue.save_setting("direct_boot_started", 0)
         log.info("Idle timeout; requested zero GPU replicas")
     elif state not in ("stopped", "stopping"):
-        salad_control.request("POST", "/stop")
+        salad_control.stop(source="scheduler")
         log.info("Stopped idle Salad container group")
 
 

@@ -391,8 +391,44 @@ def retry(job_id: str) -> bool:
         ).rowcount == 1
 
 
-def worker_seen(worker_id: str):
+def worker_seen(worker_id: str, *, generation=None, started_at=None, runtime_ready=None):
     require_enabled()
     if not worker_id or len(worker_id) > 128:
         raise ValueError("invalid worker ID")
-    save_setting("direct_worker_seen", {"worker_id": worker_id, "at": _time()})
+    if generation is not None and (not isinstance(generation, str) or not generation or len(generation) > 128):
+        raise ValueError("invalid worker generation")
+    try:
+        boot_epoch = float(started_at) if started_at is not None else None
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid worker start time") from None
+    if boot_epoch is not None and (not math.isfinite(boot_epoch) or boot_epoch <= 0 or boot_epoch > _time() + 120):
+        raise ValueError("invalid worker start time")
+    if runtime_ready is not None and not isinstance(runtime_ready, bool):
+        raise ValueError("invalid runtime readiness")
+    now = _time()
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT value FROM controller_settings WHERE key='direct_worker_seen'").fetchone()
+        try:
+            previous = json.loads(row["value"]) if row else {}
+        except (TypeError, ValueError):
+            previous = {}
+        try:
+            previous_started = float(previous.get("started_at", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            previous_started = 0.0
+        previous_generation = previous.get("generation")
+        # A late heartbeat from an older container process cannot reclaim the
+        # current Worker slot after a newer generation has announced itself.
+        if previous_generation and generation != previous_generation:
+            if boot_epoch is None:
+                return {"accepted": False, "reason": "worker_generation_required"}
+            if boot_epoch <= previous_started:
+                return {"accepted": False, "reason": "stale_worker_generation"}
+        seen = {
+            "worker_id": worker_id, "generation": generation,
+            "started_at": boot_epoch, "runtime_ready": runtime_ready, "at": now,
+        }
+        c.execute("INSERT INTO controller_settings(key,value) VALUES ('direct_worker_seen',?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(seen),))
+    return {"accepted": True}

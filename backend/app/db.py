@@ -104,6 +104,32 @@ def init_db():
         job_records.migrate(c)
 
 
+def activity_counts(c=None):
+    """Return conservative Job activity counts for GPU lifecycle guards."""
+    if c is None:
+        with connect() as conn:
+            return activity_counts(conn)
+    rows = c.execute("SELECT state,COUNT(*) AS n FROM jobs GROUP BY state").fetchall()
+    by_state = {row["state"]: int(row["n"]) for row in rows}
+    pending_states = ("pending", "submitting", "accepted", "queued", "waiting", "preparing")
+    active_states = ("processing", "running", "finalizing", "cancel_requested")
+    pending = sum(by_state.get(state, 0) for state in pending_states)
+    running = sum(by_state.get(state, 0) for state in ("processing", "running"))
+    finalizing = sum(by_state.get(state, 0) for state in ("finalizing", "cancel_requested"))
+    uncertain = by_state.get("stalled", 0)
+    # Finalizing includes output verification and transfer to persistent storage.
+    return {
+        "pending": pending,
+        "running": running,
+        "finalizing": finalizing,
+        "transferring": finalizing,
+        "uncertain": uncertain,
+        "active": sum(by_state.get(state, 0) for state in active_states),
+        "stop_blocked": bool(pending or running or finalizing or uncertain),
+        "by_state": by_state,
+    }
+
+
 def list_workflows():
     with connect() as c:
         rows = c.execute(

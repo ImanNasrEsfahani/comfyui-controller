@@ -4,6 +4,7 @@ Never return the raw Container Group to the browser: its environment may contain
 R2 credentials. Control is scoped to the ONE group configured by .env.
 """
 import httpx
+import json
 import os
 import re
 import time
@@ -29,10 +30,105 @@ def request(method, suffix="", *, json_body=None):
         return r.json() if r.content else {}
 
 
-def status():
+def _provider_call(method, suffix="", *, json_body=None):
+    """Return only a sanitized control result: HTTP status and no body data."""
+    headers = salad.headers()
+    if json_body is not None:
+        headers["Content-Type"] = "application/merge-patch+json"
+    with httpx.Client(timeout=settings.salad_http_timeout_seconds) as client:
+        response = client.request(method, group_url() + suffix, headers=headers, json=json_body)
+        response.raise_for_status()
+        return response.status_code
+
+
+_OPERATION_ACTIVE = ("requested", "awaiting_confirmation", "unconfirmed")
+
+
+def _reserve_operation(action, source, target):
+    group_name = settings.salad_group_name
+    target_json = json.dumps(target or {}, sort_keys=True, separators=(",", ":"))
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        slots = ",".join("?" for _ in _OPERATION_ACTIVE)
+        row = c.execute(
+            f"SELECT * FROM instance_operations WHERE group_name=? AND status IN ({slots}) ORDER BY requested_at DESC LIMIT 1",
+            (group_name, *_OPERATION_ACTIVE),
+        ).fetchone()
+        if row:
+            existing = dict(row)
+            same_target = existing.get("action") == action and existing.get("target_json") == target_json
+            if same_target:
+                return {"operation_id": existing["operation_id"], "status": existing["status"],
+                        "duplicate": True, "requested_at": existing["requested_at"]}
+            raise ValueError("Another provider operation is awaiting confirmation; refresh the Infrastructure status")
+        operation_id = str(uuid4())
+        requested_at = db.utcnow()
+        c.execute(
+            "INSERT INTO instance_operations(operation_id,group_name,action,source,status,requested_at,target_json,safe_detail) VALUES (?,?,?,?,?,?,?,?)",
+            (operation_id, group_name, action, source, "requested", requested_at, target_json,
+             "Controller reserved the operation before calling Salad"),
+        )
+    return {"operation_id": operation_id, "status": "requested", "duplicate": False,
+            "requested_at": requested_at}
+
+
+def _operation_update(operation_id, *, status, detail, provider_response_at=None):
+    with db.connect() as c:
+        c.execute("UPDATE instance_operations SET status=?,safe_detail=?,provider_response_at=? WHERE operation_id=?",
+                  (status, detail, provider_response_at, operation_id))
+
+
+def _apply_provider_operation(action, source, target, method, suffix="", *, payload=None, message=""):
+    reserved = _reserve_operation(action, source, target)
+    if reserved["duplicate"]:
+        return {"accepted": False, "pending": True, "operation_id": reserved["operation_id"],
+                "status": reserved["status"], "message": "The same request is already awaiting provider confirmation"}
+    try:
+        status_code = _provider_call(method, suffix, json_body=payload)
+    except httpx.HTTPStatusError:
+        _operation_update(reserved["operation_id"], status="failed",
+                          detail="Provider request failed; refresh before retrying")
+        raise
+    except Exception:
+        # A timeout can happen after Salad accepted the request. Keep the
+        # operation fenced until a later provider observation resolves it.
+        _operation_update(reserved["operation_id"], status="unconfirmed",
+                          detail="Provider response was unavailable; outcome is unconfirmed, so no automatic retry was sent")
+        raise
+    response_at = db.utcnow()
+    _operation_update(reserved["operation_id"], status="awaiting_confirmation",
+                      detail="Provider accepted the request; waiting for an observed target state",
+                      provider_response_at=response_at)
+    return {"accepted": True, "pending": True, "operation_id": reserved["operation_id"],
+            "status": "awaiting_confirmation", "provider_http_status": status_code,
+            "message": message or "Provider accepted the operation; refresh status to confirm completion"}
+
+
+def _adopt_provider_transition(action, source, target, detail):
+    """Track an in-flight transition already visible at the provider."""
+    reserved = _reserve_operation(action, source, target)
+    if not reserved["duplicate"]:
+        _operation_update(reserved["operation_id"], status="awaiting_confirmation", detail=detail,
+                          provider_response_at=db.utcnow())
+    return {"accepted": False, "pending": True, "operation_id": reserved["operation_id"],
+            "status": "awaiting_confirmation", "message": detail}
+
+
+def _activity_stop_guard():
+    activity = db.activity_counts()
+    if activity["stop_blocked"]:
+        raise ValueError(
+            "Stop is blocked while Jobs are pending, running, finalizing/transferring, or have uncertain status "
+            f"(pending={activity['pending']}, running={activity['running']}, "
+            f"finalizing={activity['finalizing']}, uncertain={activity['uncertain']})"
+        )
+    return activity
+
+
+def status(*, group_data=None):
     configured_group = settings.salad_group_name
     version, observed_at = instance_contract.begin(configured_group)
-    group = request("GET")
+    group = group_data if isinstance(group_data, dict) else request("GET")
     response = request("GET", "/instances")
     instances = response.get("instances", []) if isinstance(response, dict) else response
     if not isinstance(instances, list):
@@ -59,58 +155,89 @@ def status():
             "state": item.get("state"),
             "ready": item.get("ready"),
             "pulling_progress": item.get("pulling_progress"),
+            "pulling_progress_unit": item.get("pulling_progress_unit"),
+            "pulling_progress_total": item.get("pulling_progress_total"),
             "update_time": item.get("update_time"),
         } for item in instances if isinstance(item, dict)],
     }
     return instance_contract.record(result, version, observed_at)
 
 
-def stop():
+def stop(source="admin", *, hold_shutdown=False):
     # Group has MAX_REPLICAS=1. Stopping the group stops its only worker and
     # prevents an autoscaler from immediately replacing a stopped instance.
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is still pending")
+    _activity_stop_guard()
     if direct_queue.enabled():
-        if direct_queue.load_setting("direct_keep_warm", False):
+        if direct_queue.load_setting("direct_keep_warm", False) and not hold_shutdown:
             raise ValueError("Keep Warm is enabled. Disable it before stopping")
-        if direct_queue.counters()["running"]:
-            raise ValueError("A direct job is running; stopping will interrupt it")
     elif int((group.get("queue_autoscaler") or {}).get("min_replicas", 0)) == 1:
         raise ValueError("Keep Warm is enabled. Return to Auto first, then Stop.")
-    if (group.get("current_state") or {}).get("status") == "stopped":
-        return {"accepted": False, "message": "Already stopped"}
-    request("POST", "/stop")
+    current_state = str((group.get("current_state") or {}).get("status") or "").lower()
+    if current_state == "stopped":
+        return {"accepted": False, "pending": False, "message": "Already stopped"}
+    if current_state in {"stopping", "deleting"}:
+        return _adopt_provider_transition("stop", source, {"status": "stopped"},
+                                          "Salad is already stopping the group; waiting for stopped state and zero instances")
+    result = _apply_provider_operation("stop", source, {"status": "stopped"}, "POST", "/stop",
+                                       message="Stop request accepted; waiting for Salad to report stopped with zero instances")
     if direct_queue.enabled():
         direct_queue.save_setting("direct_boot_started", 0)
-    return {"accepted": True, "message": "Stop requested for the container group"}
+    return result
 
 
-def start():
+def start(source="admin"):
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is still pending")
-    if (group.get("current_state") or {}).get("status") != "stopped":
-        return {"accepted": False, "message": "Group is not stopped"}
-    request("POST", "/start")
-    return {"accepted": True, "message": "Start requested; request 1 replica once settled"}
+    state = str((group.get("current_state") or {}).get("status") or "").lower()
+    if state != "stopped":
+        if state in {"starting", "provisioning", "creating"}:
+            return _adopt_provider_transition("start", source, {"status": "started"},
+                                              "Salad is already starting the group; waiting for observed start state")
+        return {"accepted": False, "pending": False, "message": "Group is already started"}
+    return _apply_provider_operation("start", source, {"status": "started"}, "POST", "/start",
+                                     message="Start accepted; waiting for Salad to confirm the group is starting")
 
 
-def request_one_replica():
+def set_replicas(replicas, source="admin"):
+    if replicas not in (0, 1):
+        raise ValueError("This controller supports only zero or one GPU replica")
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is still pending")
-    if (group.get("current_state") or {}).get("status") == "stopped":
-        raise ValueError("Start the group before requesting a replica")
-    if (group.get("replicas") or 0) >= 1:
-        return {"accepted": False, "message": "One replica is already requested"}
-    request("PATCH", json_body={"replicas": 1})
+    state = str((group.get("current_state") or {}).get("status") or "").lower()
+    current = int(group.get("replicas") or 0)
+    if replicas == 1:
+        if state == "stopped":
+            raise ValueError("Start the group before requesting a replica")
+        if current >= 1:
+            return {"accepted": False, "pending": state in {"starting", "provisioning"},
+                    "message": "One replica is already requested"}
+    else:
+        _activity_stop_guard()
+        if direct_queue.enabled() and direct_queue.load_setting("direct_keep_warm", False):
+            raise ValueError("Keep Warm is enabled; turn it off before scaling to zero")
+        if not direct_queue.enabled() and int((group.get("queue_autoscaler") or {}).get("min_replicas", 0)) > 0:
+            raise ValueError("Keep Warm requires at least one replica; return to Auto before scaling to zero")
+        if current == 0:
+            return {"accepted": False, "pending": False, "message": "Zero replicas are already requested"}
+    result = _apply_provider_operation("replica" if replicas else "scale_down", source,
+        {"replicas": replicas}, "PATCH", payload={"replicas": replicas},
+        message=("One GPU replica request accepted; waiting for provider confirmation" if replicas
+                 else "Scale-to-zero request accepted; waiting for provider confirmation"))
     if direct_queue.enabled():
-        direct_queue.save_setting("direct_boot_started", time.time())
-    return {"accepted": True, "message": "One replica requested"}
+        direct_queue.save_setting("direct_boot_started", time.time() if replicas else 0)
+    return result
 
 
-def set_keep_warm(enabled):
+def request_one_replica(source="admin"):
+    return set_replicas(1, source=source)
+
+
+def set_keep_warm(enabled, source="admin"):
     """Change ONLY the autoscaler's 0/1 minimum; never change image or resources.
 
     PATCH may be asynchronous. Do not request additional replicas until a
@@ -120,11 +247,22 @@ def set_keep_warm(enabled):
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is pending; refresh and retry")
+    if not enabled:
+        _activity_stop_guard()
     if direct_queue.enabled():
         if enabled and (group.get("current_state") or {}).get("status") == "stopped":
             raise ValueError("Start the group first, then enable Keep Warm")
+        current = bool(direct_queue.load_setting("direct_keep_warm", False))
+        if current == bool(enabled):
+            return {"accepted": False, "pending": False, "message": "Keep Warm is already " + ("ON" if enabled else "OFF")}
+        reserved = _reserve_operation("keep_warm", source, {"min_replicas": 1 if enabled else 0})
+        if reserved["duplicate"]:
+            return {"accepted": False, "pending": True, "operation_id": reserved["operation_id"],
+                    "status": reserved["status"], "message": "Keep Warm change is already recorded"}
         direct_queue.save_setting("direct_keep_warm", bool(enabled))
-        return {"accepted": True, "message":
+        _operation_update(reserved["operation_id"], status="confirmed", detail="Local scheduler policy was saved",
+                          provider_response_at=db.utcnow())
+        return {"accepted": True, "pending": False, "operation_id": reserved["operation_id"], "message":
             "Direct Keep Warm enabled; one requested GPU will remain allocated until turned off" if enabled
             else "Direct Keep Warm disabled; GPU auto-stop requires DIRECT_GPU_AUTO_CONTROL=true (or use Stop manually)"}
     config = group.get("queue_autoscaler")
@@ -147,7 +285,9 @@ def set_keep_warm(enabled):
     )
     updated = {key: config[key] for key in allowed if key in config}
     updated["min_replicas"] = target
-    request("PATCH", json_body={"queue_autoscaler": updated})
+    result = _apply_provider_operation("keep_warm", source, {"min_replicas": target}, "PATCH",
+                                       payload={"queue_autoscaler": updated},
+                                       message="Keep Warm setting accepted; waiting for Salad to confirm the autoscaler minimum")
     if enabled:
         message = ("Keep Warm requested (minimum 1 GPU). Wait until pending change "
                    "clears; if there is no instance, press Start 1 GPU replica. "
@@ -156,7 +296,8 @@ def set_keep_warm(enabled):
         message = ("Auto scale-to-zero requested (minimum 0 GPUs). "
                    "Salad may take time to drain the queue and scale down. "
                    "Check instances before assuming billing has stopped.")
-    return {"accepted": True, "message": message}
+    result["message"] = message
+    return result
 
 
 # Never allow concurrent deployments to race with changing the active group.

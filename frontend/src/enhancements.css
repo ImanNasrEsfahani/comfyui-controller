@@ -14,6 +14,24 @@
 .instance-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #283344; border-radius: 12px; }
 .instance-item strong { text-transform: capitalize; }
 .instance-item .mono { overflow-wrap: anywhere; }
+.instance-progress { display: block; width: min(460px, 100%); height: 8px; margin: 8px 0; accent-color: #75aaf2; }
+.instance-cost-grid, .job-activity-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.instance-cost-grid > span, .job-activity-summary > span, .job-activity-summary > strong { display: grid; gap: 4px; min-width: 0; padding: 9px 10px; border: 1px solid #253143; border-radius: 9px; background: #101722; color: #e2eaf5; font-size: 12px; }
+.instance-cost-grid small { color: #9eacc0; font-size: 10px; }
+.instance-cost-grid strong { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.job-activity-summary { align-items: stretch; }
+.job-activity-summary > strong { color: #d9e8fc; }
+.job-activity-summary .stop-guard { grid-column: 1 / -1; color: #f0bd7a; border-color: #855a24; background: #241d13; }
+.operation-pending { margin: 12px 0; padding: 10px 12px; border: 1px solid #855a24; border-radius: 9px; color: #f0bd7a; background: #241d13; font-size: 12px; }
+.instance-timeline, .instance-sessions { margin: 12px 0; padding: 12px; border: 1px solid #293747; border-radius: 12px; background: #0d121b; }
+.instance-timeline h3 { margin: 0 0 10px; font-size: 14px; }
+.instance-timeline ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.instance-timeline li { display: grid; grid-template-columns: minmax(130px, 1fr) auto; gap: 4px 12px; padding: 8px 10px; border-left: 2px solid #5f83ad; background: #101722; font-size: 11px; }
+.instance-timeline li strong { text-transform: capitalize; }
+.instance-timeline li span { color: #9eacc0; }
+.instance-timeline li small { grid-column: 1 / -1; color: #9eacc0; overflow-wrap: anywhere; }
+.instance-sessions summary { cursor: pointer; color: #c8d6e9; font-size: 12px; }
+.instance-sessions p { margin: 9px 0; padding-top: 8px; border-top: 1px solid #222e3e; color: #b9c4d5; font-size: 11px; overflow-wrap: anywhere; }
 .admin-auth { margin-top: 12px; max-width: 460px; }
 .admin-auth label { margin-top: 8px; }
 button.danger { border-color: #6e3030; color: #f4a6a6; }
@@ -28,6 +46,7 @@ button.danger:hover { background: #402020; }
 .output-thumbnails img { width: 96px; height: 96px; border-radius: 9px; border: 1px solid #303b4c; background: #070a0e; object-fit: cover; }
 .output-thumbnails a:hover img { border-color: #a9c5ff; }
 @media (max-width: 650px) { .instance-heading { flex-direction: column; } .instance-item { align-items: flex-start; flex-direction: column; } .output-thumbnails img { width: 80px; height: 80px; } }
+@media (max-width: 650px) { .instance-cost-grid, .job-activity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .instance-timeline li { grid-template-columns: 1fr; } .instance-timeline li small { grid-column: auto; } }
 
 /* Axis 3: capability-driven inputs, workflow transparency, and local presets. */
 .workflow-capability-header, .workflow-summary, .advanced-settings, .preset-panel {

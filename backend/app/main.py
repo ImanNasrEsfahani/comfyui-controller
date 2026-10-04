@@ -744,6 +744,9 @@ def request_worker(x_internal_token: str | None = Header(default=None)):
 # ───── Direct pull-worker API. All routes require a separate strong token. ─────
 class WorkerHello(BaseModel):
     worker_id: str = Field(min_length=1, max_length=128)
+    generation: str | None = Field(default=None, min_length=1, max_length=128)
+    started_at: float | None = Field(default=None, gt=0)
+    runtime_ready: bool | None = None
 
 
 class WorkerLease(BaseModel):
@@ -774,8 +777,11 @@ class WorkerProgress(WorkerLease):
 @app.post("/api/worker/hello")
 def worker_hello(body: WorkerHello, x_worker_token: str | None = Header(default=None)):
     check_worker_token(x_worker_token)
-    direct_queue.worker_seen(body.worker_id)
-    return {"accepted": True}
+    result = direct_queue.worker_seen(body.worker_id, generation=body.generation,
+        started_at=body.started_at, runtime_ready=body.runtime_ready)
+    if not result.get("accepted"):
+        raise HTTPException(409, "stale Worker generation; this container process cannot reclaim readiness")
+    return result
 
 
 @app.post("/api/worker/claim")

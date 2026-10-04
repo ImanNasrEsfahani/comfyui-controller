@@ -26,6 +26,8 @@ TOKEN = os.environ.get("DIRECT_WORKER_TOKEN", "")
 COMFY = f"http://127.0.0.1:{os.environ.get('PORT', '3000')}/prompt"
 COMFY_BASE = COMFY.rsplit("/prompt", 1)[0]
 WORKER_ID = (socket.gethostname() + "-" + uuid4().hex[:8])[:128]
+WORKER_GENERATION = uuid4().hex
+WORKER_STARTED_AT = time.time()
 POLL_SECONDS = max(3, int(os.environ.get("DIRECT_WORKER_POLL_SECONDS", "10")))
 HEARTBEAT_SECONDS = max(5, int(os.environ.get("DIRECT_WORKER_HEARTBEAT_SECONDS", "15")))
 JOB_TIMEOUT = max(60, int(os.environ.get("DIRECT_WORKER_JOB_TIMEOUT_SECONDS", "3600")))
@@ -47,6 +49,19 @@ def request(path, data=None, *, timeout=20):
     with urllib.request.urlopen(req, timeout=timeout) as response:
         raw = response.read()
         return json.loads(raw) if raw else None
+
+
+def comfy_runtime_ready():
+    """Probe ComfyUI's local system endpoint, without inferring model readiness."""
+    req = urllib.request.Request(COMFY_BASE + "/system_stats", headers={"Accept": "application/json"}, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=3) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read())
+        return isinstance(payload, dict) and isinstance(payload.get("system"), dict) and isinstance(payload.get("devices"), list)
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
 
 
 def build_comfy_payload(job):
@@ -468,7 +483,10 @@ def main():
     while not STOP.is_set():
         try:
             if time.time() - last_hello >= 30:
-                request("/api/worker/hello", {"worker_id": WORKER_ID})
+                request("/api/worker/hello", {
+                    "worker_id": WORKER_ID, "generation": WORKER_GENERATION,
+                    "started_at": WORKER_STARTED_AT, "runtime_ready": comfy_runtime_ready(),
+                })
                 last_hello = time.time()
             item = request("/api/worker/claim", {"worker_id": WORKER_ID})
             errors = 0

@@ -83,6 +83,29 @@ def migrate(c):
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_instance_active_session
         ON instance_sessions(group_name,instance_id) WHERE stopped_at IS NULL;
+      CREATE TABLE IF NOT EXISTS instance_cost_periods (
+        period_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, group_name TEXT NOT NULL,
+        instance_id TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT,
+        hourly_rate REAL NOT NULL, currency TEXT NOT NULL, rate_source TEXT NOT NULL,
+        rate_observed_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_instance_cost_session
+        ON instance_cost_periods(session_id,started_at);
+      CREATE TABLE IF NOT EXISTS instance_stage_events (
+        event_id TEXT PRIMARY KEY, group_name TEXT NOT NULL, instance_id TEXT,
+        stage TEXT NOT NULL, provider_status TEXT, source TEXT NOT NULL,
+        observed_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_instance_stage_events_recent
+        ON instance_stage_events(group_name,instance_id,observed_at DESC);
+      CREATE TABLE IF NOT EXISTS instance_operations (
+        operation_id TEXT PRIMARY KEY, group_name TEXT NOT NULL, action TEXT NOT NULL,
+        source TEXT NOT NULL, status TEXT NOT NULL, requested_at TEXT NOT NULL,
+        provider_response_at TEXT, confirmed_at TEXT, target_json TEXT,
+        safe_detail TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_instance_operations_recent
+        ON instance_operations(group_name,requested_at DESC);
       CREATE TRIGGER IF NOT EXISTS jobs_snapshot_immutable
         BEFORE UPDATE OF snapshot_json,request_json,variables_json ON jobs
         WHEN NEW.snapshot_json IS NOT OLD.snapshot_json OR NEW.request_json IS NOT OLD.request_json

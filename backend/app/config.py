@@ -38,6 +38,10 @@ class Settings:
     salad_queue_name_value: str = required("SALAD_QUEUE_NAME")
     salad_priority: str = required("SALAD_PRIORITY").lower()
     salad_gpu_name: str = required("SALAD_GPU_NAME")
+    # These optional values are operator-supplied estimates, not Salad billing
+    # data. Empty or invalid values remain unknown in the Infrastructure view.
+    salad_gpu_hourly_rate: str = value("SALAD_GPU_HOURLY_RATE")
+    salad_gpu_rate_currency: str = value("SALAD_GPU_RATE_CURRENCY").upper()
     salad_legacy_queue: str = value("SALAD_LEGACY_QUEUE")
     r2_endpoint_url: str = required("R2_ENDPOINT_URL")
     r2_bucket: str = required("R2_BUCKET")

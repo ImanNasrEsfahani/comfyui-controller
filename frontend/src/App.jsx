@@ -48,6 +48,26 @@ function stampReceived(job) {
     client_received_monotonic: globalThis.performance?.now?.() } : job;
 }
 
+function formatObservedAt(value) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Not recorded" : date.toLocaleString();
+}
+
+function formatMoney(value, currency) {
+  if (!Number.isFinite(Number(value)) || !currency) return "Unknown";
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency,
+      maximumFractionDigits: 6 }).format(Number(value));
+  } catch {
+    return `${Number(value).toFixed(6)} ${currency}`;
+  }
+}
+
+function readableStage(value) {
+  return String(value || "unknown").replaceAll("_", " ");
+}
+
 
 function extractPlaceholders(value) {
   const found = new Set();
@@ -649,8 +669,8 @@ export default function App() {
     }
     const prompts = {
       stop: instanceInfo?.queue_mode === "direct"
-        ? "STOP the direct GPU Container Group? A running job must finish first; pending jobs stay in SQLite."
-        : "STOP the entire Container Group? The only worker and any running task may be interrupted. Pending remote jobs remain in Salad.",
+        ? "Stop the direct GPU Container Group? Stop is blocked while Jobs are pending, running, finalizing, transferring, or uncertain."
+        : "Stop the Container Group? Stop is blocked while controller-tracked Jobs are pending, running, finalizing, transferring, or uncertain.",
       start: "Start the Container Group? After it settles you can request one replica.",
       replica: "Request one billable GPU replica now?",
       "keep-warm": instanceInfo?.queue_mode === "direct"
@@ -1438,6 +1458,12 @@ export default function App() {
     }
   }
 
+  const infrastructureActivity = instanceInfo?.job_activity || {};
+  const infrastructureControlPending = Boolean(instanceInfo?.pending_change || instanceInfo?.pending_operation);
+  const infrastructureStopBlocked = Boolean(infrastructureActivity.stop_blocked);
+  const infrastructureFinancial = instanceInfo?.financial || {};
+  const infrastructureSessions = instanceInfo?.sessions || [];
+
   return (
     <main>
       <header>
@@ -1483,6 +1509,8 @@ export default function App() {
               <span><strong>{instanceInfo.instances?.length ?? 0}</strong> instances</span>
               <span>Requested: {instanceInfo.replicas ?? "unknown"}</span>
               <span>Group: <strong>{instanceInfo.status || "unknown"}</strong></span>
+              <span>Phase: <strong>{instanceInfo.phase_label || readableStage(instanceInfo.phase)}</strong></span>
+              <span>Ready: <strong>{readableStage(instanceInfo.readiness || "unknown")}</strong></span>
               <span>{instanceInfo.queue_mode === "direct"
                 ? `Controller: SQLite pull queue · ${instanceInfo.auto_gpu_control ? "auto GPU" : "manual GPU"}`
                 : `Autoscaler: ${instanceInfo.autoscaler_enabled ? "enabled" : "off"}`}</span>
@@ -1491,20 +1519,27 @@ export default function App() {
                   ? "Manual · no automatic start/stop" : "Auto · scale to zero"}</strong></span>
               {instanceInfo.hold && <span>GPU HOLD: {String(instanceInfo.hold)}</span>}
               {instanceInfo.pending_change && <span>Change pending</span>}
+              {instanceInfo.pending_operation && <span>Operation pending: {readableStage(instanceInfo.pending_operation.action)}</span>}
             </div>
             <div className="instance-list">
               {(instanceInfo.instances || []).map(instance => (
                 <div className="instance-item" key={instance.id}>
                   <div>
-                    <strong>{instance.state || "unknown"}</strong>
+                    <strong>{instance.phase_label || readableStage(instance.state || instance.provider_status)}</strong>
                     <div className="mono">{instance.id}</div>
                     <div className="hint">
                       Provider ready: {instance.provider_ready == null ? "unknown" : instance.provider_ready ? "yes" : "no"}
-                      {instance.pull_progress?.value != null ? ` · Image pull value: ${instance.pull_progress.value} (unit unknown)` : ""}
+                      {instance.pull_progress?.percent != null
+                        ? ` · Image pull: ${instance.pull_progress.percent}%`
+                        : instance.pull_progress?.raw_value != null
+                          ? ` · Image pull progress: ${instance.pull_progress.raw_value}${instance.pull_progress.unit ? ` ${instance.pull_progress.unit}` : " (unit unknown)"}` : ""}
                     </div>
+                    {instance.pull_progress?.percent != null && <progress className="instance-progress" max="100" value={instance.pull_progress.percent} aria-label="Image pull progress" />}
+                    <div className="hint">Observed session: {formatDuration(instance.session_duration_seconds)}
+                      {instance.ready_duration_seconds != null ? ` · Ready time: ${formatDuration(instance.ready_duration_seconds)}` : " · Ready time: not recorded"}</div>
                   </div>
-                  <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
-                    title={instanceInfo.keep_warm ? "Return to Auto before stopping the GPU" : "Stop the whole Container Group"}
+                  <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || instanceInfo.keep_warm || infrastructureStopBlocked}
+                    title={infrastructureStopBlocked ? "Finish or resolve all pending, active, finalizing, and uncertain Jobs first" : instanceInfo.keep_warm ? "Return to Auto before stopping the GPU" : "Stop the whole Container Group"}
                     onClick={() => groupAction("stop")}>Stop worker</button>
                 </div>
               ))}
@@ -1512,24 +1547,62 @@ export default function App() {
             </div>
             <p className="hint">Last observation: {instanceInfo.last_updated_at ? new Date(instanceInfo.last_updated_at).toLocaleString() : "unknown"}
               {isStale(instanceInfo, clock) || instanceError ? " · Stale data" : " · Recent observation"}</p>
-            <p className="hint">Worker connection: {instanceInfo.worker_status || "unknown"}. Selected-tool readiness: unknown.</p>
-            <p className="hint">Rate, estimated cost, balance and billing: unknown. {instanceInfo.financial?.limitation}</p>
+            <p className="hint">Worker connection: {instanceInfo.worker?.status || instanceInfo.worker_status || "unknown"}
+              {instanceInfo.worker?.runtime_readiness ? ` · ComfyUI runtime: ${instanceInfo.worker.runtime_readiness}` : ""}
+              {instanceInfo.worker?.last_heartbeat_at ? ` · Last authenticated heartbeat: ${formatObservedAt(instanceInfo.worker.last_heartbeat_at)}` : ""}</p>
+            <p className="hint">Selected model readiness: {instanceInfo.model_readiness || "unknown"}. {instanceInfo.model_readiness_reason}</p>
+            <div className="instance-cost-grid">
+              <span><small>Operator rate</small><strong>{infrastructureFinancial.hourly_rate != null
+                ? `${formatMoney(infrastructureFinancial.hourly_rate, infrastructureFinancial.currency)}/hour` : "Unknown"}</strong></span>
+              <span><small>Estimated observed cost</small><strong>{infrastructureFinancial.estimated_cost != null
+                ? formatMoney(infrastructureFinancial.estimated_cost, infrastructureFinancial.estimated_cost_currency) : "Unknown"}</strong></span>
+              <span><small>Account balance</small><strong>Unknown</strong></span>
+              <span><small>Provider billing</small><strong>Unknown</strong></span>
+            </div>
+            <p className="hint">Cost estimate formula: configured hourly rate × controller-observed allocated seconds ÷ 3,600. Estimate scope: {readableStage(infrastructureFinancial.estimate_scope || "not available")}. Billing boundaries are not known. {infrastructureFinancial.limitation}</p>
+            {Object.entries(infrastructureFinancial.estimated_cost_by_currency || {}).length > 1 && <p className="hint">Separate currency estimates: {Object.entries(infrastructureFinancial.estimated_cost_by_currency).map(([currency, value]) => `${formatMoney(value, currency)} (${currency})`).join(" · ")}</p>}
+            <div className="job-activity-summary" role="status">
+              <strong>Job activity guard</strong>
+              <span>Pending {infrastructureActivity.pending || 0}</span><span>Running {infrastructureActivity.running || 0}</span>
+              <span>Finalizing / transfer {infrastructureActivity.finalizing || infrastructureActivity.transferring || 0}</span>
+              <span>Uncertain {infrastructureActivity.uncertain || 0}</span>
+              {infrastructureStopBlocked && <span className="stop-guard">Stop and scale-to-zero are disabled until activity clears.</span>}
+            </div>
+            {instanceInfo.pending_operation && <p className="operation-pending" role="status">
+              {instanceInfo.pending_operation.safe_detail || "Waiting for Salad to report the requested target state."}
+              {instanceInfo.pending_operation.requested_at ? ` · Requested ${formatObservedAt(instanceInfo.pending_operation.requested_at)}` : ""}
+            </p>}
+            {instanceInfo.phase_timeline?.length > 0 && <div className="instance-timeline">
+              <h3>Lifecycle observations</h3>
+              <ol>{instanceInfo.phase_timeline.slice(-12).map(event => <li key={event.event_id}>
+                <strong>{readableStage(event.stage)}</strong><span>{formatObservedAt(event.observed_at)}</span>
+                {event.provider_status && <small>Provider: {event.provider_status}</small>}
+              </li>)}</ol>
+            </div>}
+            {infrastructureSessions.length > 0 && <details className="instance-sessions">
+              <summary>Observed sessions and cost estimates ({infrastructureSessions.length})</summary>
+              <div>{infrastructureSessions.slice(0, 8).map(session => <p key={session.session_id}>
+                <strong>{session.instance_id}</strong> · Started {formatObservedAt(session.started_at)} · Duration {formatDuration(session.duration_seconds)}
+                {session.first_ready_at ? ` · Ready ${formatObservedAt(session.first_ready_at)}` : " · Ready time not recorded"}
+                {Object.entries(session.estimated_cost_by_currency || {}).map(([currency, amount]) => ` · Estimated ${formatMoney(amount, currency)}`).join("")}
+              </p>)}</div>
+            </details>}
             <div className="button-row">
               {instanceInfo.queue_mode === "direct" && instanceInfo.hold && (
                 <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured}
                   onClick={resetGpuHold}>Reset GPU HOLD</button>
               )}
               {instanceInfo.status === "stopped" ? (
-                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || Boolean(instanceInfo.hold)}
                   onClick={() => groupAction("start")}>Start group</button>
               ) : (
                 <>
                   {Number(instanceInfo.replicas || 0) === 0 && (
-                    <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
+                    <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || Boolean(instanceInfo.hold)}
                       onClick={() => groupAction("replica")}>Start 1 GPU replica</button>
                   )}
                   {Number(instanceInfo.replicas || 0) > 0 && !(instanceInfo.instances || []).length && (
-                    <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
+                    <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || instanceInfo.keep_warm || infrastructureStopBlocked}
                       onClick={() => groupAction("stop")}>Stop requested worker</button>
                   )}
                 </>
@@ -1551,13 +1624,13 @@ export default function App() {
                         : "Start one replica manually. Automatic start/stop is disabled in private .env.")
                       : "Enable Keep Warm BEFORE a batch of edits so the GPU is not released between jobs."}
                 </p>
-                {instanceInfo.pending_change && <p className="hint">Salad is applying the change. Refresh to confirm before starting another action.</p>}
+                {infrastructureControlPending && <p className="hint">An operation is awaiting provider confirmation. Refresh to confirm before starting another action.</p>}
               </div>
               {instanceInfo.keep_warm ? (
-                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || infrastructureStopBlocked}
                   onClick={() => groupAction("auto-scale")}>Return to Auto</button>
               ) : (
-                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.status === "stopped"}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || infrastructureControlPending || instanceInfo.status === "stopped"}
                   onClick={() => groupAction("keep-warm")}>Keep Warm · 1 GPU</button>
               )}
             </div>
