@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
-import { mergeJob, mergeJobList, isStale, submissionBody } from "../frontend/src/contracts.js";
+import { mergeJob, mergeJobList, isStale, submissionBody, validateVariables } from "../frontend/src/contracts.js";
 
 test("older Job record cannot replace a terminal record", () => {
   const done = {id: "j1", version: 5, state: "succeeded"};
@@ -44,6 +44,19 @@ test("unloaded workflows and missing effective fields cannot be submitted", () =
   assert.throws(() => submissionBody(null, {}, "medium", "key"));
   assert.throws(() => submissionBody({id: "wf", workflow_version: "a", variable_keys: ["prompt.user"]}, {}, "medium", "key"));
 });
+test("form validation reports all missing and invalid fields without coercing values", () => {
+  const keys = ["prompt.user", "generation.seed", "generation.steps", "output.width", "input.image_1"];
+  const values = {"prompt.user": "فارسی نیم‌فاصله\nline 2", "generation.seed": 1.5,
+    "generation.steps": 0, "output.width": Number.NaN, "input.image_1": "https://remote.invalid/image.png"};
+  assert.deepEqual(validateVariables(keys, values), {
+    "generation.seed": "Enter a whole number within the safe numeric range.",
+    "generation.steps": "Enter a positive whole number.",
+    "output.width": "Enter a whole number within the safe numeric range.",
+    "input.image_1": "Upload this image through the image field before generating."
+  });
+  assert.throws(() => submissionBody({id: "wf", workflow_version: "a".repeat(64), variable_keys: keys}, values, "medium", "bad"),
+    error => Object.keys(error.fieldErrors).length === 4);
+});
 
 const uiUrl = process.env.AXIS_UI_URL;
 const staticDir = process.env.AXIS_STATIC_DIR;
@@ -65,29 +78,51 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
     url = "http://127.0.0.1:" + server.address().port;
   }
   const modulePath = process.env.PLAYWRIGHT_MODULE;
-  const {chromium} = await import(modulePath ? pathToFileURL(modulePath).href : "playwright");
-  const browser = await chromium.launch({headless: true,
-    ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath: process.env.CHROMIUM_EXECUTABLE} : {}),
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--single-process"]});
+  let chromium;
+  let browser;
+  try {
+    ({chromium} = await import(modulePath ? pathToFileURL(modulePath).href : "playwright"));
+    browser = await chromium.launch({headless: true,
+      ...(process.env.CHROMIUM_EXECUTABLE ? {executablePath: process.env.CHROMIUM_EXECUTABLE} : {}),
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--no-zygote", "--single-process"]});
+  } catch (error) {
+    if (server) await new Promise(resolve => server.close(resolve));
+    throw error;
+  }
   const context = await browser.newContext({viewport: {width: 1200, height: 1000}});
-  const sent = [], jobs = [], errors = [];
+  const sent = [], sentTokens = [], jobs = [], errors = [], tokenAttempts = [];
   let abortNextSubmission = false, delayWorkflowA = false, delaySubmit = false;
-  const wf = id => ({id, name: id, api_prompt: {"1": {class_type: "Test", inputs: {text: "{{prompt.user}}", seed: "{{generation.seed}}"}}},
-    workflow_version: "a".repeat(64), variable_keys: ["prompt.user", "generation.seed"]});
+  let uploadStartedResolve, uploadReleaseResolve;
+  const uploadStarted = new Promise(resolve => { uploadStartedResolve = resolve; });
+  const uploadRelease = new Promise(resolve => { uploadReleaseResolve = resolve; });
+  const wf = id => id === "image-wf"
+    ? ({id, name: id, api_prompt: {"1": {class_type: "LoadImage", inputs: {image: "{{input.image_1}}"}},
+        "2": {class_type: "Test", inputs: {text: "{{prompt.user}}"}}}, workflow_version: "b".repeat(64),
+        variable_keys: ["input.image_1", "prompt.user"]})
+    : ({id, name: id, api_prompt: {"1": {class_type: "Test", inputs: {text: "{{prompt.user}}", seed: "{{generation.seed}}"}}},
+        workflow_version: "a".repeat(64), variable_keys: ["prompt.user", "generation.seed"]});
   await context.route("**/health", route => route.fulfill({json: {default_priority: "medium", gpu_name: "test-gpu", admin_configured: true}}));
   await context.route("**/api/**", async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
-    if (path === "/api/workflows") return route.fulfill({json: ["wf", "A", "B"].map(id => ({id, name: id}))});
+    if (path === "/api/workflows") return route.fulfill({json: ["wf", "A", "B", "image-wf"].map(id => ({id, name: id}))});
     if (path.startsWith("/api/workflows/")) {
       const id = path.split("/").pop();
       if (id === "A" && delayWorkflowA) await new Promise(resolve => setTimeout(resolve, 300));
       return route.fulfill({json: wf(id)});
     }
+    if (path === "/api/salad/settings" && req.method() === "GET") {
+      const token = req.headers()["x-internal-token"] || "";
+      tokenAttempts.push(token);
+      if (token === "valid-token") return route.fulfill({json: {active: {image: "worker", group_name: "g", display_name: "test"},
+        draft: {image: "worker", group_name: "g", display_name: "test"}, has_changes: false}});
+      return route.fulfill({status: 401, json: {error: {code: "unauthorized", message: "invalid internal token", path: ""}}});
+    }
     if (path === "/api/salad/instances") return route.fulfill({json: {name: "test-group", group_name: "test-group", status: "running", provider_status: "running",
       version: 1, replicas: 1, queue_mode: "direct", instances: [{id: "i", state: "running", provider_ready: true,
         pull_progress: {value: .7, unit: null}}], worker_status: "unknown", last_updated_at: new Date().toISOString(), financial: {balance: null, hourly_rate: null, limitation: "No verified financial API"}}});
     if (path === "/api/jobs" && req.method() === "POST") {
-      const body = req.postDataJSON(); sent.push(body);
+      const body = req.postDataJSON(); sent.push(body); sentTokens.push(req.headers()["x-internal-token"] || "");
+      if (sentTokens.at(-1) !== "valid-token") return route.fulfill({status: 401, json: {error: {message: "invalid internal token"}}});
       let job = body.client_request_id && jobs.find(job => job.client_request_id === body.client_request_id);
       if (!job) {
         job = {id: "job-" + sent.length, job_id: "job-" + sent.length, client_request_id: body.client_request_id,
@@ -99,8 +134,14 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
       if (abortNextSubmission) {abortNextSubmission = false; return route.abort();}
       return route.fulfill({json: job});
     }
+    if (path === "/api/uploads" && req.method() === "POST") {
+      uploadStartedResolve();
+      await uploadRelease;
+      return route.fulfill({json: {s3_uri: "s3://test-bucket/inputs/upload-1/photo.png", asset_id: "upload-1"}});
+    }
     if (path === "/api/jobs") return route.fulfill({json: jobs});
     if (path.startsWith("/api/job-requests/")) {
+      if ((req.headers()["x-internal-token"] || "") !== "valid-token") return route.fulfill({status: 401, json: {error: {message: "invalid internal token"}}});
       const job = jobs.find(job => job.client_request_id === path.split("/").pop());
       return route.fulfill({status: job ? 200 : 404, json: job || {error: {message: "not found"}}});
     }
@@ -111,6 +152,16 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
   page.on("pageerror", e => errors.push(e.message));
   try {
     await page.goto(url);
+    await page.getByRole("button", {name: "Infrastructure & cost", exact: true}).click();
+    await page.locator("#admin-token").fill("valid-token");
+    await page.getByRole("button", {name: "Apply Token"}).click();
+    await page.locator(".token-status[data-state='connected']").waitFor();
+    await page.locator("#admin-token").fill("invalid-token");
+    await page.getByRole("button", {name: "Apply Token"}).click();
+    await page.locator(".token-status[data-state='invalid']").waitFor();
+    assert.match(await page.locator(".token-status").innerText(), /previously verified token remains active/);
+    assert.deepEqual(tokenAttempts.slice(0, 2), ["valid-token", "invalid-token"]);
+    await page.getByRole("button", {name: "Create & edit", exact: true}).click();
     await page.locator("select").first().selectOption("wf");
     const prompt = page.locator("#inputs-run textarea.runtime-textarea");
     const run = page.getByRole("button", {name: "Run on Salad GPU"});
@@ -119,6 +170,8 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
     await prompt.fill("B"); await run.click();
     await page.getByText(baselineOnly ? /^Submitted: job-2/ : /^Accepted: job-2/).waitFor();
     assert.deepEqual(sent.slice(0, 2).map(body => body.variables["prompt.user"]), ["A", "B"]);
+    assert.deepEqual(sentTokens.slice(0, 2), ["valid-token", "valid-token"]);
+    assert.equal(JSON.stringify(sent[0]).includes("valid-token"), false);
     assert.equal(jobs.find(job => job.id === "job-1").snapshot.variables["prompt.user"], "A");
     if (!baselineOnly) assert.notEqual(sent[0].client_request_id, sent[1].client_request_id);
     await t.test("A/B payload and immutable snapshot", () => {});
@@ -135,14 +188,52 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
     assert.equal(sent.at(-1).variables["prompt.user"], "instant typing"); delaySubmit = false;
     await t.test("immediate submit and same-turn double click", () => {});
 
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {origin: url});
+    await page.evaluate(() => navigator.clipboard.writeText("پرامپت تازه\nwith نیم‌فاصله"));
+    await prompt.fill("start old-tail end");
+    await prompt.evaluate(element => element.setSelectionRange(6, 14));
+    await page.getByRole("button", {name: "Paste into User prompt"}).click();
+    await page.waitForFunction(() => document.querySelector("#inputs-run textarea.runtime-textarea")?.value === "start پرامپت تازه\nwith نیم‌فاصله end");
+    await run.click();
+    await page.getByText(/^Accepted: job-4/).waitFor();
+    assert.equal(sent.at(-1).variables["prompt.user"], "start پرامپت تازه\nwith نیم‌فاصله end");
+    await t.test("Paste replaces only the selection and the next request carries Unicode multiline text", () => {});
+
+    await prompt.fill("before reset");
+    await page.locator("#inputs-run input[type='number']").fill("987654321");
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Clear Form"}).click();
+    assert.equal(await prompt.inputValue(), "");
+    assert.equal(await page.locator("#inputs-run input[type='number']").inputValue(), "123456789");
+    assert.equal(jobs.length, 4);
+    await t.test("Clear Form restores workflow defaults and leaves Jobs untouched", () => {});
+
+    const uploadFile = {name: "reference.png", mimeType: "image/png", buffer: Buffer.from("fake png")};
+    await page.locator("select").first().selectOption("image-wf");
+    await page.locator("input[type=file]").setInputFiles(uploadFile);
+    await uploadStarted;
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", {name: "Clear Form"}).click();
+    uploadReleaseResolve();
+    await page.waitForTimeout(100);
+    assert.match(await page.locator("#inputs-run").innerText(), /Required placeholder: \{\{input.image_1\}\}/);
+    assert.equal(await page.locator("#inputs-run .ready").count(), 0);
+    await t.test("late upload response cannot repopulate a cleared form", () => {});
+
+    await page.locator("select").first().selectOption("wf");
+    await prompt.waitFor();
     await prompt.fill("uncertain response"); abortNextSubmission = true;
     await run.click();
     const recover = page.getByRole("button", {name: "Recover last submission"});
     await recover.waitFor();
     assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("comfyui-controller:pending-request")).variables["prompt.user"]), "uncertain response");
     await page.reload();
-    await page.getByText(/^Accepted: job-4/).waitFor();
-    assert.equal(sent.length, 4);
+    await page.getByRole("button", {name: "Infrastructure & cost", exact: true}).click();
+    await page.locator("#admin-token").fill("valid-token");
+    await page.getByRole("button", {name: "Apply Token"}).click();
+    await page.locator(".token-status[data-state='connected']").waitFor();
+    await page.getByText(/^Accepted: job-5/).waitFor();
+    assert.equal(sent.length, 5);
     assert.equal(await page.evaluate(() => sessionStorage.getItem("comfyui-controller:pending-request")), null);
     await t.test("lost submit response recovers after reload without new POST", () => {});
 
@@ -171,7 +262,7 @@ test("browser: form, recovery, selection races, views, mobile and multiple tabs"
 
     const second = await context.newPage();
     await second.goto(url); await second.getByRole("button", {name: "Jobs & outputs", exact: true}).click();
-    await second.getByText("job-4", {exact: true}).waitFor();
+    await second.getByText("job-5", {exact: true}).waitFor();
     assert.equal(await second.locator(".job").count(), jobs.length);
     await second.close();
     assert.deepEqual(errors, []);

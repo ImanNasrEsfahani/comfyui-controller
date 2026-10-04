@@ -104,7 +104,7 @@ def test_worker_endpoint_auth_and_local_submit(monkeypatch):
         assert api.post("/api/worker/claim", json={"worker_id": "w"},
                         headers={"X-Worker-Token": "bad"}).status_code == 401
         job_response = api.post("/api/jobs", json={"workflow_id": "wf", "variables": {
-            "input.image_1": "s3://comfy/inputs/a/a.png"}},
+            "input.image_1": f"s3://{settings.r2_bucket}/inputs/a/a.png"}},
             headers={"X-Internal-Token": settings.internal_token})
         assert job_response.status_code == 200, job_response.text
         result = job_response.json()
@@ -116,7 +116,7 @@ def test_worker_endpoint_auth_and_local_submit(monkeypatch):
         claimed = api.post("/api/worker/claim", json={"worker_id": "test"}, headers=headers)
         assert claimed.status_code == 200
         attempt = claimed.json()
-        assert attempt["request"]["prompt"]["1"]["inputs"]["image"] == "s3://comfy/inputs/a/a.png"
+        assert attempt["request"]["prompt"]["1"]["inputs"]["image"] == f"s3://{settings.r2_bucket}/inputs/a/a.png"
         class OutputStore:
             def head_object(self, **kwargs):
                 return {"ContentLength": 128, "ContentType": "image/png"}

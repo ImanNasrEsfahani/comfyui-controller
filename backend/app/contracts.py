@@ -60,6 +60,7 @@ def placeholders(value):
 
 
 SECRET_KEY = re.compile(r"(^|[._-])(token|secret|authorization|api[_-]?key|password)($|[._-])", re.I)
+JS_SAFE_INTEGER = (1 << 53) - 1
 
 
 def ensure_no_credentials(value, path="variables"):
@@ -99,15 +100,39 @@ def validate_variables(template, variables):
         if re.search(r"(seed|steps|width|height|count)$", key, re.I):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ContractError("invalid_integer", "An integer is required", "variables." + key)
+            if abs(value) > JS_SAFE_INTEGER:
+                raise ContractError("invalid_range", "The integer is outside the range this form can represent safely", "variables." + key)
             if not key.lower().endswith("seed") and value <= 0:
                 raise ContractError("invalid_range", "A positive integer is required", "variables." + key)
         elif re.search(r"(cfg|denoise|strength)$", key, re.I):
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ContractError("invalid_number", "A finite number is required", "variables." + key)
         if key.startswith("prompt.") and not isinstance(value, str):
             raise ContractError("invalid_prompt", "Prompt must be text", "variables." + key)
         if re.fullmatch(r"input\.image_\d+", key) and (not isinstance(value, str) or not value.strip()):
             raise ContractError("missing_reference", "An input image is required", "variables." + key)
+    return dict(variables)
+
+
+def validate_image_references(variables):
+    """Require image bindings to resolve to this controller's uploaded assets.
+
+    Legacy signed URLs for this bucket are normalized by submit_job before this
+    check. Arbitrary remote URLs and non-input objects are never dispatched.
+    """
+    for key, value in variables.items():
+        if not re.fullmatch(r"input\.image_\d+", key):
+            continue
+        uri = urlparse(value) if isinstance(value, str) else None
+        path = (uri.path or "").lstrip("/").split("/") if uri else []
+        if (not uri or uri.scheme != "s3" or uri.netloc != settings.r2_bucket
+                or len(path) < 3 or path[0] != "inputs" or not all(path[1:])
+                or uri.query or uri.fragment or uri.username or uri.password):
+            raise ContractError(
+                "invalid_reference",
+                "Upload this reference image through the controller before generating",
+                "variables." + key,
+            )
     return dict(variables)
 
 

@@ -122,6 +122,7 @@ def test_atomic_acceptance_duplicate_conflict_recovery_and_workflow_change():
     ({"variables": {"prompt.user": settings.internal_token, "generation.seed": 17}}, "sensitive_value"),
     ({"variables": {"prompt.user": "A"}}, "missing_variable"),
     ({"model_id": "unsupported-selector"}, "extra_forbidden"),
+    ({"variables": {"prompt.user": "A", "generation.seed": 9007199254740992}}, "invalid_range"),
 ])
 def test_validation_errors_are_stable_and_do_not_echo_credentials(change, code):
     with TestClient(app) as client:
@@ -131,6 +132,32 @@ def test_validation_errors_are_stable_and_do_not_echo_credentials(change, code):
     assert "path" in response.json()["error"]
     assert settings.internal_token not in response.text
     assert not db.list_jobs()
+
+
+def test_non_finite_numbers_are_rejected_by_the_backend_contract():
+    with pytest.raises(contracts.ContractError) as error:
+        contracts.validate_variables(WF, {"prompt.user": "A", "generation.seed": 17, "generation.cfg": float("nan")})
+    assert error.value.code == "invalid_number"
+    assert error.value.path == "variables.generation.cfg"
+
+
+def test_reference_images_must_be_controller_uploaded_input_assets():
+    image_wf = {"1": {"class_type": "LoadImage", "inputs": {"image": "{{input.image_1}}"}},
+                "2": {"class_type": "Test", "inputs": {"text": "{{prompt.user}}"}}}
+    db.save_workflow("image-wf", "Image workflow", image_wf)
+    body = {"contract_version": 1, "client_request_id": "valid-image", "workflow_id": "image-wf",
+            "workflow_version": contracts.digest(image_wf), "priority": "medium",
+            "variables": {"prompt.user": "portrait", "input.image_1": "s3://test-bucket/inputs/asset-1/photo.png"}}
+    with TestClient(app) as client:
+        accepted = client.post("/api/jobs", headers=ADMIN, json=body)
+        assert accepted.status_code == 200, accepted.text
+        invalid = {**body, "client_request_id": "invalid-image", "variables": {
+            **body["variables"], "input.image_1": "https://attacker.invalid/photo.png"}}
+        rejected = client.post("/api/jobs", headers=ADMIN, json=invalid)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "invalid_reference"
+    assert rejected.json()["error"]["path"] == "variables.input.image_1"
+    assert len(db.list_jobs()) == 1
 
 
 def test_legacy_input_contract_still_works():

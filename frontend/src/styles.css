@@ -79,6 +79,25 @@ button.link-button:hover { background: transparent; text-decoration: underline; 
   gap: 10px; margin-top: 7px; min-height: 19px;
 }
 .inline-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.field-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.field-heading label { margin-bottom: 7px; }
+.paste-button { min-height: 42px; padding-inline: 14px; }
+.paste-button span { margin-right: 5px; }
+.field-error, .form-validation { color: #ffaaa5; font-size: 12px; line-height: 1.45; margin: 7px 0 0; }
+input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: #b94c46; }
+.generate-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: stretch; margin-top: 8px; }
+.generate-actions button { margin-top: 0; min-height: 46px; }
+.generate-actions button.primary { width: 100%; }
+.generate-actions button.clear-form { padding-inline: 18px; border-color: #465266; }
+.generate-reason { margin: 8px 0 0; }
+.admin-auth { margin-top: 14px; }
+.admin-auth > label { margin-top: 0; }
+.token-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.token-entry button { margin: 0; min-height: 44px; white-space: nowrap; }
+.token-status { font-size: 12px; margin: 8px 0 0; color: #b8c2d2; }
+.token-status[data-state="connected"] { color: #8ee6b4; }
+.token-status[data-state="invalid"], .token-status[data-state="network_error"], .token-status[data-state="timeout"] { color: #ffaaa5; }
+.token-status[data-state="checking"] { color: #a9c5ff; }
 .checkbox-field {
   margin-top: 16px; padding: 12px; border: 1px solid #202938; border-radius: 10px;
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -118,4 +137,8 @@ button.link-button:hover { background: transparent; text-decoration: underline; 
   .two { grid-template-columns: 1fr; }
   .inline-control { grid-template-columns: 1fr; }
   .checkbox-field { align-items: flex-start; flex-direction: column; }
+  .generate-actions { grid-template-columns: 1fr; }
+  .token-entry { grid-template-columns: 1fr; }
+  .token-entry button { width: 100%; }
+  .paste-button { min-height: 44px; }
 }

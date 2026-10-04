@@ -223,6 +223,7 @@ def submit_job(workflow_id, variables, priority=None, *, client_request_id=None,
             return recovered if recovered else value
         return value
     variables = durable(variables)
+    variables = contracts.validate_image_references(variables)
     snapshot = contracts.effective_snapshot(wf, variables, selected_priority, client_request_id=client_request_id)
     contracts.ensure_no_credentials(snapshot["prompt"], "workflow")
     try:

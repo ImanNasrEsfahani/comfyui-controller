@@ -1,13 +1,14 @@
 import "./enhancements.css";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { mergeJob, mergeJobList, isStale, submissionBody, requestId } from "./contracts.js";
+import { mergeJob, mergeJobList, isStale, submissionBody, requestId, validateVariables } from "./contracts.js";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
 let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
 
-async function api(path, options = {}) {
+async function api(path, options = {}, tokenOverride = undefined) {
   const headers = new Headers(options.headers || {});
-  if (sessionToken) headers.set("X-Internal-Token", sessionToken);
+  const token = tokenOverride === undefined ? sessionToken : tokenOverride;
+  if (token) headers.set("X-Internal-Token", token);
   const r = await fetch(`${API}${path}`, { ...options, headers });
   if (!r.ok) {
     const body = await r.text();
@@ -16,6 +17,7 @@ async function api(path, options = {}) {
     const error = new Error(parsed?.error?.message || `${r.status}: ${body}`);
     error.status = r.status;
     error.code = parsed?.error?.code;
+    error.path = parsed?.error?.path || (Array.isArray(parsed?.detail) ? parsed.detail[0]?.loc?.join(".") : "");
     throw error;
   }
   if (r.status === 204) return null;
@@ -196,6 +198,14 @@ export default function App() {
   const submitting = useRef(false);
   const pendingSubmission = useRef(null);
   const sourceJob = useRef(null);
+  const workflowDefaults = useRef({ id: "", variables: {} });
+  const fieldRefs = useRef({});
+  const uploadRevision = useRef(0);
+  const uploadActive = useRef(false);
+  const latestTokenDraft = useRef("");
+  const appliedToken = useRef("");
+  const tokenCheckGeneration = useRef(0);
+  const tokenCheckController = useRef(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
   const [browserConnection, setBrowserConnection] = useState("checking");
@@ -211,6 +221,9 @@ export default function App() {
   const [gpuName, setGpuName] = useState("");
   const [adminConfigured, setAdminConfigured] = useState(false);
   const [adminToken, setAdminToken] = useState("");
+  const [tokenApplied, setTokenApplied] = useState(false);
+  const [tokenStatus, setTokenStatus] = useState("not_applied");
+  const [tokenFeedback, setTokenFeedback] = useState("No token has been applied in this tab.");
   const [activePage, setActivePage] = useState("editor");
   const [deploymentSettings, setDeploymentSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState({ image: "", group_name: "", display_name: "" });
@@ -225,6 +238,8 @@ export default function App() {
   const [uploadingKey, setUploadingKey] = useState("");
   const [uploadedNames, setUploadedNames] = useState({});
   const [variables, setVariables] = useState({ "input.image_1": "" });
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [formRevision, setFormRevision] = useState(0);
   const [variablesDraft, setVariablesDraft] = useState(
     JSON.stringify({ "input.image_1": "" }, null, 2)
   );
@@ -249,6 +264,14 @@ export default function App() {
     [imageKeys, variables]
   );
 
+  const currentDefaults = workflowDefaults.current.id === selected
+    ? workflowDefaults.current.variables
+    : normalizeVariables(placeholderKeys);
+  const variablesJsonDirty = variablesDraft !== JSON.stringify(variables, null, 2);
+  const formChanged = placeholderKeys.some(key =>
+    JSON.stringify(variables[key]) !== JSON.stringify(currentDefaults[key])
+  ) || Boolean(uploadingKey) || variablesJsonDirty;
+
   const selectedName = useMemo(
     () => workflows.find(w => w.id === selected)?.name || selected,
     [workflows, selected]
@@ -266,6 +289,7 @@ export default function App() {
         setGpuName(data.gpu_name || "");
         setAdminConfigured(Boolean(data.admin_configured));
         setBrowserConnection("connected");
+        if (pendingSubmission.current && !data.admin_configured) recoverSubmission(false);
       })
       .catch(e => setMessage(`Unable to load GPU settings: ${e.message}`));
     refreshWorkflows().catch(e => setMessage(e.message));
@@ -276,7 +300,6 @@ export default function App() {
       if (pending?.client_request_id) {
         pendingSubmission.current = pending;
         setSubmissionUncertain(true);
-        recoverSubmission(false);
       }
     } catch { /* Session storage is optional. */ }
 
@@ -322,8 +345,92 @@ export default function App() {
   }
 
   function changeAdminToken(value) {
-    sessionToken = value;
+    latestTokenDraft.current = value;
+    tokenCheckGeneration.current += 1;
+    tokenCheckController.current?.abort();
+    tokenCheckController.current = null;
     setAdminToken(value);
+    if (value && value === appliedToken.current) {
+      setTokenStatus("connected");
+      setTokenFeedback("This verified token is already applied in this browser tab.");
+    } else if (value) {
+      setTokenStatus("unapplied");
+      setTokenFeedback(tokenApplied
+        ? "This draft is not applied. The previously verified token remains active."
+        : "This token is only a draft. Apply it to check the connection.");
+    } else {
+      setTokenStatus("not_applied");
+      setTokenFeedback(tokenApplied
+        ? "The draft is empty. The previously verified token remains active."
+        : "No token has been applied in this tab.");
+    }
+  }
+
+  async function applyAdminToken() {
+    const candidate = adminToken;
+    if (!adminConfigured) {
+      setTokenStatus("unavailable");
+      setTokenFeedback("The server has no APP_INTERNAL_TOKEN configured.");
+      return;
+    }
+    if (!candidate) {
+      setTokenStatus("not_applied");
+      setTokenFeedback("Enter the token, then choose Apply Token.");
+      return;
+    }
+
+    tokenCheckController.current?.abort();
+    const controller = new AbortController();
+    tokenCheckController.current = controller;
+    const generation = ++tokenCheckGeneration.current;
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    setTokenStatus("checking");
+    setTokenFeedback("Checking the token with the controller…");
+    try {
+      // A read-only authenticated endpoint verifies the token without changing
+      // Salad settings or starting a GPU action.
+      await api("/salad/settings", { signal: controller.signal }, candidate);
+      if (generation !== tokenCheckGeneration.current || latestTokenDraft.current !== candidate) return;
+      sessionToken = candidate;
+      appliedToken.current = candidate;
+      setTokenApplied(true);
+      setTokenStatus("connected");
+      setTokenFeedback("Connected. The verified token is held in memory for this tab only.");
+      setMessage("Admin token verified and applied for this browser tab.");
+      refreshJobs().catch(() => {});
+      refreshInstances().catch(() => {});
+      if (activePage === "settings") refreshDeploymentSettings();
+      if (pendingSubmission.current) recoverSubmission();
+    } catch (error) {
+      if (generation !== tokenCheckGeneration.current || latestTokenDraft.current !== candidate) return;
+      if (error.name === "AbortError") {
+        setTokenStatus("timeout");
+        setTokenFeedback(tokenApplied
+          ? "The check timed out. The previously verified token remains active."
+          : "The check timed out. The token was not applied; check the connection and retry.");
+      } else if (error.status === 401) {
+        setTokenStatus("invalid");
+        setTokenFeedback(tokenApplied
+          ? "This token is invalid. The previously verified token remains active."
+          : "This token was rejected. It was not applied.");
+      } else if (error.status === 503) {
+        setTokenStatus("unavailable");
+        setTokenFeedback("The controller is not configured to accept an admin token.");
+      } else if (!error.status || error.name === "TypeError") {
+        setTokenStatus("network_error");
+        setTokenFeedback(tokenApplied
+          ? "The controller could not be reached. The previously verified token remains active."
+          : "The controller could not be reached; the token was not applied.");
+      } else {
+        setTokenStatus("unavailable");
+        setTokenFeedback(tokenApplied
+          ? `The controller returned HTTP ${error.status}. The previously verified token remains active.`
+          : `The controller returned HTTP ${error.status}; the token was not applied.`);
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (generation === tokenCheckGeneration.current) tokenCheckController.current = null;
+    }
   }
 
   async function refreshDeploymentSettings() {
@@ -381,8 +488,8 @@ export default function App() {
   }
 
   async function groupAction(action) {
-    if (!adminConfigured || !adminToken) {
-      setMessage("Set an admin token in the private .env and enter it above.");
+    if (!adminConfigured || !tokenApplied) {
+      setMessage("Set APP_INTERNAL_TOKEN in the private server .env, then apply the valid token in the browser.");
       return;
     }
     const prompts = {
@@ -488,7 +595,7 @@ export default function App() {
   }
 
   async function resetGpuHold() {
-    if (!adminConfigured || !adminToken) return;
+    if (!adminConfigured || !tokenApplied) return;
     if (!window.confirm("Clear GPU HOLD? Only do this after resolving the worker error. Auto GPU mode may allocate a billable machine.")) return;
     setGroupBusy(true);
     try {
@@ -539,9 +646,45 @@ export default function App() {
     }
   }
 
+  function captureFieldRef(key, element) {
+    if (element) fieldRefs.current[key] = element;
+    else delete fieldRefs.current[key];
+  }
+
+  function readLatestVariables(keys = loadedWorkflow.current?.variable_keys || placeholderKeys) {
+    const current = liveVariables.current || {};
+    const latest = {};
+    for (const key of keys) {
+      const element = fieldRefs.current[key];
+      if (!element || /^input\.image_\d+$/.test(key)) {
+        latest[key] = current[key];
+        continue;
+      }
+      const kind = variableKind(key, current[key]);
+      if (kind === "boolean") latest[key] = Boolean(element.checked);
+      else if (kind === "number") {
+        if (element.value === "") latest[key] = "";
+        else {
+          const parsed = element.valueAsNumber;
+          latest[key] = Number.isFinite(parsed) ? parsed : element.value;
+        }
+      } else latest[key] = element.value;
+    }
+    return latest;
+  }
+
   function updateVariable(key, value) {
-    liveVariables.current = { ...liveVariables.current, [key]: value };
-    setVariables(prev => ({ ...prev, [key]: value }));
+    const next = { ...liveVariables.current, [key]: value };
+    liveVariables.current = next;
+    setVariables(next);
+    setFieldErrors(previous => {
+      if (!Object.prototype.hasOwnProperty.call(previous, key)) return previous;
+      const error = validateVariables([key], next)[key];
+      const updated = { ...previous };
+      if (error) updated[key] = error;
+      else delete updated[key];
+      return updated;
+    });
   }
 
   function randomizeSeed(key) {
@@ -586,6 +729,10 @@ export default function App() {
 
   async function loadWorkflow(id, restoredVariables = null) {
     const request = ++selectionRequest.current;
+    uploadRevision.current += 1;
+    uploadActive.current = false;
+    setUploadingKey("");
+    setFieldErrors({});
     loadedWorkflow.current = null;
     sourceJob.current = null;
     setWorkflowLoading(Boolean(id));
@@ -598,6 +745,7 @@ export default function App() {
       if (request !== selectionRequest.current) return;
       const json = JSON.stringify(w.api_prompt, null, 2);
       const keys = extractPlaceholders(w.api_prompt);
+      const defaults = normalizeVariables(keys);
       const nextVariables = restoredVariables === null
         ? loadLocalVariables(id, keys)
         : normalizeVariables(keys, restoredVariables);
@@ -608,6 +756,7 @@ export default function App() {
       setVariables(nextVariables);
       liveVariables.current = nextVariables;
       loadedWorkflow.current = w;
+      workflowDefaults.current = { id: w.id, variables: JSON.parse(JSON.stringify(defaults)) };
       setVariablesDraft(JSON.stringify(nextVariables, null, 2));
       if (restoredVariables !== null) {
         const names = {};
@@ -628,28 +777,59 @@ export default function App() {
   async function uploadFile(key, file) {
     if (!file) return;
 
+    if (uploadActive.current) {
+      setMessage("Wait for the current image upload to finish before choosing another file.");
+      return;
+    }
+    if (file.type && !file.type.toLowerCase().startsWith("image/")) {
+      setFieldErrors(previous => ({ ...previous, [key]: "Choose an image file." }));
+      setMessage(`${friendlyLabel(key)} must be an image file.`);
+      return;
+    }
+
+    uploadActive.current = true;
+    const revision = uploadRevision.current;
     setUploadingKey(key);
     const selection = selectionRequest.current;
+    setFieldErrors(previous => {
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
     setMessage(`Uploading ${friendlyLabel(key)}...`);
 
     try {
       const form = new FormData();
       form.append("file", file);
       const out = await api("/uploads", { method: "POST", body: form });
-      if (selection !== selectionRequest.current) return;
+      if (revision !== uploadRevision.current || selection !== selectionRequest.current) return;
+      if (typeof out?.s3_uri !== "string" || !out.s3_uri) {
+        throw new Error("The upload completed without an image reference. Try again.");
+      }
 
       // A stable URI survives R2 signature expiry; the backend signs it for each run.
       updateVariable(key, out.s3_uri);
       setUploadedNames(prev => ({ ...prev, [key]: file.name }));
       setMessage(`${friendlyLabel(key)} uploaded successfully.`);
     } catch (e) {
-      setMessage(e.message);
+      if (revision === uploadRevision.current && selection === selectionRequest.current) {
+        setFieldErrors(previous => ({ ...previous, [key]: e.message || "Image upload failed. Try again." }));
+        setMessage(e.message || "Image upload failed. Try again.");
+      }
     } finally {
-      setUploadingKey("");
+      if (revision === uploadRevision.current) {
+        uploadActive.current = false;
+        setUploadingKey("");
+      }
     }
   }
 
   function clearUpload(key) {
+    if (uploadingKey === key) {
+      uploadRevision.current += 1;
+      uploadActive.current = false;
+      setUploadingKey("");
+    }
     updateVariable(key, "");
     setUploadedNames(prev => {
       const next = { ...prev };
@@ -665,19 +845,72 @@ export default function App() {
       setVariables(next);
       liveVariables.current = next;
       setVariablesDraft(JSON.stringify(next, null, 2));
-      setMessage("Variables JSON applied.");
+      const errors = validateVariables(placeholderKeys, next);
+      setFieldErrors(errors);
+      setMessage(Object.keys(errors).length
+        ? "Variables JSON applied. Correct the highlighted fields before generating."
+        : "Variables JSON applied.");
     } catch (e) {
       setMessage(`Invalid Variables JSON: ${e.message}`);
     }
   }
 
-  function resetVariables() {
-    const next = normalizeVariables(placeholderKeys);
+  async function pastePrompt(key) {
+    const element = fieldRefs.current[key];
+    if (!element) {
+      setMessage("The prompt field is not available. Click it and use the keyboard Paste command.");
+      return;
+    }
+    const before = element.value;
+    const start = element.selectionStart ?? before.length;
+    const end = element.selectionEnd ?? start;
+    try {
+      if (!navigator.clipboard?.readText) throw new Error("clipboard unavailable");
+      const text = await navigator.clipboard.readText();
+      if (!text) {
+        setMessage("The clipboard is empty. The prompt was left unchanged.");
+        return;
+      }
+      if (element.value !== before) {
+        setMessage("The prompt changed while clipboard access was pending. Click Paste again.");
+        return;
+      }
+      const next = before.slice(0, start) + text + before.slice(end);
+      updateVariable(key, next);
+      const cursor = start + text.length;
+      requestAnimationFrame(() => {
+        const current = fieldRefs.current[key];
+        current?.focus();
+        current?.setSelectionRange(cursor, cursor);
+      });
+      setMessage(`${friendlyLabel(key)} pasted. The cursor remains in the prompt.`);
+    } catch {
+      setMessage("Clipboard access was unavailable or denied. Focus the prompt and use Ctrl+V (or ⌘V on Mac) to paste manually.");
+      element.focus();
+    }
+  }
+
+  function clearForm() {
+    if (!selected || workflowLoading || !formChanged) return;
+    const confirmed = window.confirm(
+      "Reset this workflow form to its defaults? Applied token, connection settings, saved Jobs and outputs remain. Running Jobs are not cancelled."
+    );
+    if (!confirmed) return;
+    uploadRevision.current += 1;
+    uploadActive.current = false;
+    setUploadingKey("");
+    const defaults = workflowDefaults.current.id === selected
+      ? workflowDefaults.current.variables
+      : normalizeVariables(placeholderKeys);
+    const next = JSON.parse(JSON.stringify(defaults));
     setVariables(next);
     liveVariables.current = next;
     setUploadedNames({});
+    setFieldErrors({});
     setVariablesDraft(JSON.stringify(next, null, 2));
-    setMessage("Runtime variables reset to defaults.");
+    setFormRevision(version => version + 1);
+    sourceJob.current = null;
+    setMessage("Form reset. Existing Jobs, outputs, connection settings and the applied token remain unchanged.");
   }
 
   function rememberSubmission(body) {
@@ -696,6 +929,10 @@ export default function App() {
   }
 
   async function recoverSubmission(resend = true) {
+    if (adminConfigured && !sessionToken) {
+      setMessage("Apply the admin token before recovering the saved request.");
+      return;
+    }
     if (submitting.current || !pendingSubmission.current) return;
     submitting.current = true;
     setBusy(true);
@@ -724,9 +961,38 @@ export default function App() {
       setMessage("Choose a workflow first.");
       return;
     }
+    if (workflowLoading || loadedWorkflow.current?.id !== selected) {
+      setMessage("Wait for the selected workflow to finish loading.");
+      return;
+    }
+    if (adminConfigured && !tokenApplied) {
+      setMessage("Apply a valid admin token in Infrastructure & cost before generating.");
+      return;
+    }
+    if (!priority) {
+      setMessage("Wait for the server GPU configuration to load.");
+      return;
+    }
+    if (variablesJsonDirty) {
+      setMessage("Apply the Variables JSON edits, or use Clear Form to discard them, before generating.");
+      return;
+    }
 
-    if (missingImages.length > 0) {
-      setMessage(`Upload required image(s): ${missingImages.map(friendlyLabel).join(", ")}.`);
+    // Read live controls immediately before creating the immutable request
+    // snapshot. This catches a final keystroke before React's next render.
+    const latest = readLatestVariables(loadedWorkflow.current.variable_keys || placeholderKeys);
+    liveVariables.current = latest;
+    setVariables(latest);
+    const errors = validateVariables(loadedWorkflow.current.variable_keys || placeholderKeys, latest);
+    setFieldErrors(errors);
+    if (uploadActive.current || uploadingKey) {
+      setMessage("Wait for the reference image upload to finish before generating.");
+      return;
+    }
+    if (Object.keys(errors).length) {
+      setMessage("Correct the highlighted workflow fields before generating.");
+      const firstInvalid = Object.keys(errors)[0];
+      fieldRefs.current[firstInvalid]?.focus?.();
       return;
     }
 
@@ -735,7 +1001,8 @@ export default function App() {
     setMessage("");
 
     try {
-      const body = submissionBody(loadedWorkflow.current, liveVariables.current, priority, requestId(), sourceJob.current);
+      const snapshot = JSON.parse(JSON.stringify(latest));
+      const body = submissionBody(loadedWorkflow.current, snapshot, priority, requestId(), sourceJob.current);
       rememberSubmission(body);
       const out = await api("/jobs", {
         method: "POST",
@@ -746,6 +1013,12 @@ export default function App() {
       submissionAccepted(out);
       await refreshJobs();
     } catch (e) {
+      const serverField = typeof e.path === "string" ? e.path.replace(/^body\./, "").replace(/^variables\./, "") : "";
+      if (serverField && (loadedWorkflow.current?.variable_keys || []).includes(serverField)) {
+        setFieldErrors(previous => ({ ...previous, [serverField]: e.message }));
+      } else if (e.fieldErrors) {
+        setFieldErrors(previous => ({ ...previous, ...e.fieldErrors }));
+      }
       if (e.status && e.status < 500 && (e.status !== 409 || e.code === "workflow_changed")) {
         pendingSubmission.current = null;
         try { sessionStorage.removeItem("comfyui-controller:pending-request"); } catch { /* Optional. */ }
@@ -823,7 +1096,7 @@ export default function App() {
                       {instance.pull_progress?.value != null ? ` · Image pull value: ${instance.pull_progress.value} (unit unknown)` : ""}
                     </div>
                   </div>
-                  <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
+                  <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
                     title={instanceInfo.keep_warm ? "Return to Auto before stopping the GPU" : "Stop the whole Container Group"}
                     onClick={() => groupAction("stop")}>Stop worker</button>
                 </div>
@@ -836,20 +1109,20 @@ export default function App() {
             <p className="hint">Rate, estimated cost, balance and billing: unknown. {instanceInfo.financial?.limitation}</p>
             <div className="button-row">
               {instanceInfo.queue_mode === "direct" && instanceInfo.hold && (
-                <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured}
+                <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured}
                   onClick={resetGpuHold}>Reset GPU HOLD</button>
               )}
               {instanceInfo.status === "stopped" ? (
-                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
                   onClick={() => groupAction("start")}>Start group</button>
               ) : (
                 <>
                   {Number(instanceInfo.replicas || 0) === 0 && (
-                    <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
+                    <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || Boolean(instanceInfo.hold)}
                       onClick={() => groupAction("replica")}>Start 1 GPU replica</button>
                   )}
                   {Number(instanceInfo.replicas || 0) > 0 && !(instanceInfo.instances || []).length && (
-                    <button className="danger ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
+                    <button className="danger ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.keep_warm}
                       onClick={() => groupAction("stop")}>Stop requested worker</button>
                   )}
                 </>
@@ -874,21 +1147,17 @@ export default function App() {
                 {instanceInfo.pending_change && <p className="hint">Salad is applying the change. Refresh to confirm before starting another action.</p>}
               </div>
               {instanceInfo.keep_warm ? (
-                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change}
                   onClick={() => groupAction("auto-scale")}>Return to Auto</button>
               ) : (
-                <button className="ghost" disabled={groupBusy || !adminToken || !adminConfigured || instanceInfo.pending_change || instanceInfo.status === "stopped"}
+                <button className="ghost" disabled={groupBusy || !tokenApplied || !adminConfigured || instanceInfo.pending_change || instanceInfo.status === "stopped"}
                   onClick={() => groupAction("keep-warm")}>Keep Warm · 1 GPU</button>
               )}
             </div>
           </>
         ) : !instanceError && <p className="muted">Loading Salad instance status…</p>}
-        <div className="admin-auth">
-          <label htmlFor="admin-token">Admin token (kept only in this browser tab)</label>
-          <input id="admin-token" type="password" autoComplete="off" value={adminToken}
-            onChange={e => changeAdminToken(e.target.value)} placeholder="APP_INTERNAL_TOKEN from server .env" />
-          {!adminConfigured && <p className="validation">Admin actions are disabled. Set APP_INTERNAL_TOKEN in the private server .env and rebuild the backend.</p>}
-        </div>
+        <TokenControl id="admin-token" value={adminToken} status={tokenStatus} feedback={tokenFeedback}
+          configured={adminConfigured} onChange={changeAdminToken} onApply={applyAdminToken} />
       </section>
 
       <section hidden={activePage !== "editor"} className="grid">
@@ -962,15 +1231,19 @@ export default function App() {
 
           {selected && placeholderKeys.map(key => (
             <VariableField
-              key={key}
+              key={`${key}:${formRevision}`}
               variableKey={key}
               value={variables[key]}
               uploadedName={uploadedNames[key]}
-              uploading={uploadingKey === key}
+              uploading={Boolean(uploadingKey)}
+              isUploading={uploadingKey === key}
+              error={fieldErrors[key]}
+              onFieldRef={captureFieldRef}
               onChange={updateVariable}
               onUpload={uploadFile}
               onClearUpload={clearUpload}
               onRandomizeSeed={randomizeSeed}
+              onPastePrompt={pastePrompt}
             />
           ))}
 
@@ -987,9 +1260,6 @@ export default function App() {
                 <button type="button" className="ghost" onClick={applyVariablesJson}>
                   Apply JSON
                 </button>
-                <button type="button" className="ghost" onClick={resetVariables}>
-                  Reset variables
-                </button>
               </div>
             </details>
           )}
@@ -998,7 +1268,7 @@ export default function App() {
           <p className="hint">
             {priority ? `${priority}${gpuName ? ` · ${gpuName}` : ""}` : "Loading server GPU settings..."}
           </p>
-          {adminConfigured && !adminToken && <p className="validation">Enter the browser token in Infrastructure &amp; cost before running a Job.</p>}
+          {adminConfigured && !tokenApplied && <p className="validation">Apply a valid token in Infrastructure &amp; cost before running a Job.</p>}
 
           {missingImages.length > 0 && selected && (
             <p className="validation">
@@ -1006,15 +1276,30 @@ export default function App() {
             </p>
           )}
 
-          <button
-            className="primary"
-            disabled={busy || workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || !priority}
-            onClick={run}
-          >
-            Run on Salad GPU
-          </button>
+          {Object.keys(fieldErrors).length > 0 && (
+            <p className="form-validation" role="alert">{Object.keys(fieldErrors).length} field(s) need attention. Correct the highlighted values before generating.</p>
+          )}
+          <div className="generate-actions">
+            <button
+              className="primary"
+              disabled={busy || workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || (adminConfigured && !tokenApplied)}
+              onClick={run}
+              aria-busy={busy}
+              title={busy ? "Request is being submitted" : submissionUncertain ? "Recover the saved request first" : ""}
+            >
+              {busy ? "Submitting…" : "Run on Salad GPU"}
+            </button>
+            <button type="button" className="ghost clear-form" disabled={busy || workflowLoading || !selected || !formChanged} onClick={clearForm}>
+              Clear Form
+            </button>
+          </div>
+          {(workflowLoading || submissionUncertain || Boolean(uploadingKey) || !selected || missingImages.length > 0 || Object.keys(fieldErrors).length > 0 || variablesJsonDirty || !priority || (adminConfigured && !tokenApplied)) && (
+            <p className="hint generate-reason" role="status">
+              {workflowLoading ? "Loading workflow…" : adminConfigured && !tokenApplied ? (submissionUncertain ? "Apply the admin token to recover the previous request." : "Apply the admin token to enable Generate.") : submissionUncertain ? "Recover the previous request before generating." : uploadingKey ? "Wait for the image upload to finish." : !selected ? "Choose a workflow to enable Generate." : missingImages.length ? `Required: ${missingImages.map(friendlyLabel).join(", ")}` : Object.keys(fieldErrors).length ? "Correct the highlighted fields to enable Generate." : variablesJsonDirty ? "Apply JSON edits or clear them before generating." : !priority ? "Waiting for GPU configuration." : ""}
+            </p>
+          )}
           {currentJobId && <p className="hint" role="status">Current Job: {jobs.find(job => job.id === currentJobId)?.status || "unknown"} · See Jobs &amp; outputs for results.</p>}
-          {submissionUncertain && <button className="ghost" disabled={busy} onClick={() => recoverSubmission()}>Recover last submission</button>}
+          {submissionUncertain && <button className="ghost" disabled={busy || browserConnection === "checking" || (adminConfigured && !tokenApplied)} onClick={() => recoverSubmission()}>Recover last submission</button>}
         </article>
       </section>
 
@@ -1030,7 +1315,7 @@ export default function App() {
           {jobs.map(j => (
             <Job key={j.id} job={j} fallbackPriority={priority}
               disabled={jobBusyId === j.id}
-              adminReady={adminConfigured && Boolean(adminToken)}
+              adminReady={adminConfigured && tokenApplied}
               onEdit={editJob} onRetry={retryJob} onDelete={hideJob} onRefresh={refreshOneJob} />
           ))}
         </div>
@@ -1039,13 +1324,10 @@ export default function App() {
         <section className="card settings-card">
           <h2>Salad deployment settings</h2>
           <p className="hint">These three non-secret values live in the controller SQLite database, not .env. Saving a draft never changes the active GPU group.</p>
-          <div className="admin-auth">
-            <label htmlFor="settings-admin-token">Admin token (browser tab only)</label>
-            <input type="password" id="settings-admin-token" autoComplete="off" value={adminToken}
-              onChange={e => changeAdminToken(e.target.value)} placeholder="APP_INTERNAL_TOKEN" />
-          </div>
+          <TokenControl id="settings-admin-token" value={adminToken} status={tokenStatus} feedback={tokenFeedback}
+            configured={adminConfigured} onChange={changeAdminToken} onApply={applyAdminToken} />
           <div className="button-row">
-            <button type="button" className="ghost" disabled={settingsBusy || !adminToken}
+            <button type="button" className="ghost" disabled={settingsBusy || !tokenApplied}
               onClick={refreshDeploymentSettings}>Load / refresh settings</button>
           </div>
           {settingsMessage && <p className="notice" role="status">{settingsMessage}</p>}
@@ -1076,10 +1358,10 @@ export default function App() {
                 <p className="hint">Pending provisioning: {deploymentSettings.provisioning.group_name}</p>
               )}
               <div className="button-row">
-                <button type="button" disabled={settingsBusy || !adminToken}
+                <button type="button" disabled={settingsBusy || !tokenApplied}
                   onClick={saveDeploymentDraft}>Save draft to DB</button>
                 <button type="button" className="primary"
-                  disabled={settingsBusy || !adminToken || !deploymentSettings.has_changes}
+                  disabled={settingsBusy || !tokenApplied || !deploymentSettings.has_changes}
                   onClick={deployDeploymentDraft}>Deploy saved draft</button>
               </div>
               <p className="hint">Deploy is refused if the active GPU/Keep Warm is on, changes are pending, or a local job is still active. Wait for the old group to reach 0 replicas first. Deploy may take up to 45 seconds.</p>
@@ -1091,32 +1373,63 @@ export default function App() {
   );
 }
 
+function TokenControl({ id, value, status, feedback, configured, onChange, onApply }) {
+  const busy = status === "checking";
+  return (
+    <div className="admin-auth">
+      <label htmlFor={id}>Admin token (kept only in this browser tab)</label>
+      <div className="token-entry">
+        <input id={id} type="password" autoComplete="off" value={value}
+          onChange={event => onChange(event.target.value)} placeholder="APP_INTERNAL_TOKEN from server .env" />
+        <button type="button" disabled={!configured || busy || !value} onClick={onApply}>
+          {busy ? "Checking…" : "Apply Token"}
+        </button>
+      </div>
+      <p className="token-status" data-state={status} role="status" aria-live="polite">{feedback}</p>
+      {!configured && <p className="validation">Admin actions are disabled. Set APP_INTERNAL_TOKEN in the private server .env.</p>}
+    </div>
+  );
+}
+
 function VariableField({
   variableKey,
   value,
   uploadedName,
   uploading,
+  isUploading,
+  error,
+  onFieldRef,
   onChange,
   onUpload,
   onClearUpload,
-  onRandomizeSeed
+  onRandomizeSeed,
+  onPastePrompt
 }) {
   const kind = variableKind(variableKey, value);
   const label = friendlyLabel(variableKey);
+  const fieldId = `variable-${variableKey}`;
+  const errorId = `error-${variableKey}`;
+  const errorProps = error ? { "aria-invalid": true, "aria-describedby": errorId } : {};
 
   if (kind === "image") {
     return (
       <div className="field-block">
-        <label>{label}</label>
+        <label htmlFor={fieldId}>{label}</label>
         <input
+          id={fieldId}
           type="file"
           accept="image/*"
           disabled={uploading}
-          onChange={e => onUpload(variableKey, e.target.files?.[0])}
+          onChange={e => {
+            const file = e.target.files?.[0];
+            e.currentTarget.value = "";
+            onUpload(variableKey, file);
+          }}
+          {...errorProps}
         />
         <div className="upload-status">
           <span className={value ? "ready" : "hint"}>
-            {uploading
+            {isUploading
               ? "Uploading..."
               : value
                 ? `Ready${uploadedName ? ` · ${uploadedName}` : ""}`
@@ -1132,6 +1445,7 @@ function VariableField({
             </button>
           )}
         </div>
+        {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
   }
@@ -1139,13 +1453,24 @@ function VariableField({
   if (kind === "textarea") {
     return (
       <div className="field-block">
-        <label>{label}</label>
+        <div className="field-heading">
+          <label htmlFor={fieldId}>{label}</label>
+          <button type="button" className="ghost paste-button" aria-label={`Paste into ${label}`}
+            onClick={() => onPastePrompt(variableKey)}>
+            <span aria-hidden="true">▣</span> Paste
+          </button>
+        </div>
         <textarea
+          id={fieldId}
+          ref={element => onFieldRef(variableKey, element)}
           className="runtime-textarea"
           value={value ?? ""}
           onChange={e => onChange(variableKey, e.target.value)}
+          onCompositionEnd={e => onChange(variableKey, e.currentTarget.value)}
           placeholder={`{{${variableKey}}}`}
+          {...errorProps}
         />
+        {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
   }
@@ -1155,13 +1480,17 @@ function VariableField({
       <div className="field-block checkbox-field">
         <label className="checkbox-label">
           <input
+            id={fieldId}
             type="checkbox"
+            ref={element => onFieldRef(variableKey, element)}
             checked={Boolean(value)}
             onChange={e => onChange(variableKey, e.target.checked)}
+            {...errorProps}
           />
           <span>{label}</span>
         </label>
         <span className="hint"><code>{`{{${variableKey}}}`}</code></span>
+        {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
   }
@@ -1170,15 +1499,19 @@ function VariableField({
     const isSeed = /seed/i.test(variableKey);
     return (
       <div className="field-block">
-        <label>{label}</label>
+        <label htmlFor={fieldId}>{label}</label>
         <div className="inline-control">
           <input
+            id={fieldId}
             type="number"
+            ref={element => onFieldRef(variableKey, element)}
             step={numberStep(variableKey)}
             value={value ?? ""}
+            {...errorProps}
             onChange={e => {
               const raw = e.target.value;
-              onChange(variableKey, raw === "" ? "" : Number(raw));
+              const numeric = e.target.valueAsNumber;
+              onChange(variableKey, raw === "" ? "" : Number.isFinite(numeric) ? numeric : raw);
             }}
           />
           {isSeed && (
@@ -1192,19 +1525,24 @@ function VariableField({
           )}
         </div>
         <span className="hint"><code>{`{{${variableKey}}}`}</code></span>
+        {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
   }
 
   return (
     <div className="field-block">
-      <label>{label}</label>
+      <label htmlFor={fieldId}>{label}</label>
       <input
+        id={fieldId}
         type="text"
+        ref={element => onFieldRef(variableKey, element)}
         value={value ?? ""}
         onChange={e => onChange(variableKey, e.target.value)}
         placeholder={`{{${variableKey}}}`}
+        {...errorProps}
       />
+      {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
     </div>
   );
 }
