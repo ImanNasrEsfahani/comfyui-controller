@@ -1,6 +1,7 @@
 import "./enhancements.css";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { mergeJob, mergeJobList, isStale, submissionBody, requestId, validateVariables, containsCredentialLikeData } from "./contracts.js";
+import { mergeJob, mergeJobList, appendUniqueJobs, stagePercent, formatDuration, jobStateLabel,
+  isStale, submissionBody, requestId, validateVariables, containsCredentialLikeData } from "./contracts.js";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
 let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
@@ -41,6 +42,11 @@ const TERMINAL_STATES = new Set([
 ]);
 
 const RETRYABLE_STATES = new Set(["failed", "cancelled", "submit_failed", "stalled"]);
+
+function stampReceived(job) {
+  return job ? { ...job, client_received_at: Date.now(),
+    client_received_monotonic: globalThis.performance?.now?.() } : job;
+}
 
 
 function extractPlaceholders(value) {
@@ -245,6 +251,10 @@ function loadPresets(workflowId) {
 export default function App() {
   const jobsPolling = useRef(false);
   const jobsGeneration = useRef(0);
+  const historyGeneration = useRef(0);
+  const historyBusy = useRef(false);
+  const jobsPollFailures = useRef(0);
+  const nextJobsPollAt = useRef(0);
   const instancesPolling = useRef(false);
   const selectionRequest = useRef(0);
   const loadedWorkflow = useRef(null);
@@ -275,6 +285,15 @@ export default function App() {
   const [includePromptsInPreset, setIncludePromptsInPreset] = useState(true);
   const [referenceOrder, setReferenceOrder] = useState([]);
   const [jobs, setJobs] = useState([]);
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historyCursor, setHistoryCursor] = useState(null);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyFilters, setHistoryFilters] = useState({state: "", workflow_id: "", created_after: "", created_before: "", q: ""});
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [comparisonIds, setComparisonIds] = useState([]);
+  const [comparison, setComparison] = useState(null);
+  const [lastJobsSync, setLastJobsSync] = useState(null);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowName, setWorkflowName] = useState("");
   const [workflowJson, setWorkflowJson] = useState(blankWorkflow);
@@ -387,18 +406,36 @@ export default function App() {
     } catch { /* Session storage is optional. */ }
 
     const jobsTimer = setInterval(() => {
-      refreshJobs().catch(() => {});
+      if (document.visibilityState === "visible") refreshJobs().catch(() => {});
     }, 6000);
     const instanceTimer = setInterval(() => {
       refreshInstances().catch(() => {});
     }, 10000);
     const clockTimer = setInterval(() => setClock(Date.now()), 1000);
+    const onOnline = () => { setBrowserConnection("checking"); refreshJobs(true).catch(() => {}); };
+    const onOffline = () => setBrowserConnection("disconnected");
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setBrowserConnection("checking");
+        refreshJobs(true).catch(() => {});
+      }
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(jobsTimer);
       clearInterval(instanceTimer);
       clearInterval(clockTimer);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
+
+  useEffect(() => {
+    if (activePage === "jobs") loadHistory(true);
+  }, [activePage]);
 
   useEffect(() => {
     setVariables(prev => {
@@ -641,8 +678,11 @@ export default function App() {
   async function refreshOneJob(job) {
     setJobBusyId(job.id);
     try {
-      const updated = await api(`/jobs/${encodeURIComponent(job.id)}`);
+      const updated = stampReceived(await api(`/jobs/${encodeURIComponent(job.id)}`));
       setJobs(prev => prev.map(item => item.id === job.id ? mergeJob(item, updated) : item));
+      setHistoryItems(prev => prev.map(item => item.id === job.id ? mergeJob(item, updated) : item));
+      setLastJobsSync(Date.now());
+      setBrowserConnection("connected");
       setMessage(`Status refreshed: ${updated.state}`);
     } catch (e) {
       setMessage(e.message);
@@ -653,15 +693,22 @@ export default function App() {
 
   async function hideJob(job) {
     const remoteWarning = TERMINAL_STATES.has(job.state)
-      ? "Hide this job from the controller? This does not remove files from R2."
-      : "Hide this job locally? Its REMOTE Salad job will NOT be cancelled and may still run and incur costs.";
+      ? "Hide this Job from history? This does not remove its output files."
+      : job.execution_mode === "direct" && job.state === "pending"
+        ? "Remove this queued Job? It will be cancelled before dispatch and hidden from history."
+        : job.execution_mode === "direct"
+          ? "Hide this Job from history? An active Direct Worker Job will NOT be cancelled and may continue running."
+          : "Hide this Job locally? Its remote Salad Queue Job will NOT be cancelled and may still run.";
     if (!window.confirm(remoteWarning)) return;
     setJobBusyId(job.id);
     try {
       await api(`/jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
       jobsGeneration.current += 1;
       setJobs(previous => previous.filter(item => item.id !== job.id));
-      setMessage("Job hidden locally. Any remote Salad job remains unchanged.");
+      setHistoryItems(previous => previous.filter(item => item.id !== job.id));
+      setComparisonIds(previous => previous.filter(id => id !== job.id));
+      setComparison(null);
+      setMessage("Job hidden from history. Any active execution remains unchanged.");
     } catch (e) {
       setMessage(e.message);
     } finally {
@@ -699,13 +746,51 @@ export default function App() {
         body: JSON.stringify({ allow_duplicate: mayStillRun })
       });
       jobsGeneration.current += 1;
-      setJobs(previous => previous.map(item => item.id === output.id ? mergeJob(item, output) : item));
+      const received = stampReceived(output);
+      setJobs(previous => previous.map(item => item.id === output.id ? mergeJob(item, received) : item));
+      setHistoryItems(previous => previous.map(item => item.id === output.id ? mergeJob(item, received) : item));
       setMessage(`Retry accepted: ${output.id}`);
       await refreshJobs();
     } catch (e) {
       setMessage(e.message);
     } finally {
       setJobBusyId("");
+    }
+  }
+
+  async function cancelJob(job) {
+    if (!window.confirm("Cancel this Job? A queued Job will be removed before execution. An active Job will remain in “Cancellation requested” until the Worker confirms the ComfyUI interrupt.")) return;
+    setJobBusyId(job.id);
+    try {
+      const output = stampReceived(await api(`/jobs/${encodeURIComponent(job.id)}/cancel`, {method: "POST"}));
+      setJobs(previous => previous.map(item => item.id === output.id ? mergeJob(item, output) : item));
+      setHistoryItems(previous => previous.map(item => item.id === output.id ? mergeJob(item, output) : item));
+      setMessage(output.state === "cancel_requested"
+        ? "Cancellation requested. The Job will show Cancelled only after the Worker confirms it stopped."
+        : output.state === "cancelled" ? "Job cancelled; it will not be dispatched." : `Job is already ${jobStateLabel(output.state).toLowerCase()}.`);
+      await refreshJobs(true);
+      if (activePage === "jobs") await loadHistory(true);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setJobBusyId("");
+    }
+  }
+
+  function toggleComparison(job) {
+    setComparison(null);
+    setComparisonIds(previous => previous.includes(job.id)
+      ? previous.filter(id => id !== job.id)
+      : previous.length < 2 ? [...previous, job.id] : [previous[1], job.id]);
+  }
+
+  async function compareSelectedJobs() {
+    if (comparisonIds.length !== 2) return;
+    try {
+      const params = new URLSearchParams({first_id: comparisonIds[0], second_id: comparisonIds[1]});
+      setComparison(await api(`/job-comparison?${params.toString()}`));
+    } catch (error) {
+      setHistoryError(error.message);
     }
   }
 
@@ -731,24 +816,19 @@ export default function App() {
 
   async function refreshJobs(allPending = false) {
     if (jobsPolling.current) return;
+    if (!allPending && Date.now() < nextJobsPollAt.current) return;
     jobsPolling.current = true;
     const generation = jobsGeneration.current;
     try {
-    const list = await api("/jobs?limit=30");
+    const rawList = await api("/jobs?limit=30");
+    const list = rawList.map(stampReceived);
     const pending = list
       .filter(job => !TERMINAL_STATES.has(job.state))
       .slice(0, allPending === true ? 30 : 10);
-
-    if (pending.length === 0) {
-      if (generation === jobsGeneration.current) setJobs(previous => mergeJobList(previous, list));
-      setBrowserConnection("connected");
-      return;
-    }
-
     const refreshed = await Promise.all(
       pending.map(async job => {
         try {
-          return await api(`/jobs/${encodeURIComponent(job.id)}`);
+          return stampReceived(await api(`/jobs/${encodeURIComponent(job.id)}`));
         } catch {
           return job;
         }
@@ -756,13 +836,55 @@ export default function App() {
     );
 
     const byId = new Map(refreshed.map(job => [job.id, job]));
-    if (generation === jobsGeneration.current) setJobs(previous => mergeJobList(previous, list.map(job => byId.get(job.id) || job)));
+    const latest = list.map(job => byId.get(job.id) || job);
+    if (generation === jobsGeneration.current) {
+      setJobs(previous => mergeJobList(previous, latest));
+      const latestById = new Map(latest.map(job => [job.id, job]));
+      setHistoryItems(previous => previous.map(item => latestById.has(item.id)
+        ? mergeJob(item, latestById.get(item.id)) : item));
+    }
+    jobsPollFailures.current = 0;
+    nextJobsPollAt.current = 0;
     setBrowserConnection("connected");
+    setLastJobsSync(Date.now());
     } catch (error) {
+      jobsPollFailures.current += 1;
+      nextJobsPollAt.current = Date.now() + Math.min(60000, 6000 * (2 ** Math.min(4, jobsPollFailures.current - 1)));
       setBrowserConnection("disconnected");
       throw error;
     } finally {
       jobsPolling.current = false;
+    }
+  }
+
+  async function loadHistory(reset = true, filterOverride = null) {
+    if (historyBusy.current) return;
+    const filters = filterOverride || historyFilters;
+    const generation = reset ? historyGeneration.current + 1 : historyGeneration.current;
+    historyGeneration.current = generation;
+    historyBusy.current = true;
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const params = new URLSearchParams({limit: "24"});
+      if (filters.state) params.set("state", filters.state);
+      if (filters.workflow_id) params.set("workflow_id", filters.workflow_id);
+      if (filters.created_after) params.set("created_after", new Date(`${filters.created_after}T00:00:00`).toISOString());
+      if (filters.created_before) params.set("created_before", new Date(`${filters.created_before}T23:59:59.999`).toISOString());
+      if (filters.q.trim()) params.set("q", filters.q.trim());
+      if (!reset && historyCursor) params.set("cursor", historyCursor);
+      const page = await api(`/jobs/history?${params.toString()}`);
+      if (generation !== historyGeneration.current) return;
+      const items = (page.items || []).map(stampReceived);
+      setHistoryItems(previous => reset ? items : appendUniqueJobs(previous, items));
+      setHistoryTotal(page.total || 0);
+      setHistoryCursor(page.next_cursor || null);
+      setLastJobsSync(Date.now());
+    } catch (error) {
+      if (generation === historyGeneration.current) setHistoryError(error.message);
+    } finally {
+      historyBusy.current = false;
+      setHistoryLoading(false);
     }
   }
 
@@ -1192,10 +1314,11 @@ export default function App() {
     pendingSubmission.current = null;
     try { sessionStorage.removeItem("comfyui-controller:pending-request"); } catch { /* Optional. */ }
     setSubmissionUncertain(false);
-    setCurrentJobId(out.id);
+    const accepted = stampReceived(out);
+    setCurrentJobId(accepted.id);
     jobsGeneration.current += 1;
-    setJobs(previous => [mergeJob(previous.find(job => job.id === out.id), out), ...previous.filter(job => job.id !== out.id)]);
-    setMessage(`Accepted: ${out.id} · ${out.status || out.state}. Output appears in Jobs & outputs after completion.`);
+    setJobs(previous => [mergeJob(previous.find(job => job.id === accepted.id), accepted), ...previous.filter(job => job.id !== accepted.id)]);
+    setMessage(`Accepted: ${accepted.id} · ${accepted.status || accepted.state}. Output appears in Jobs & outputs after completion.`);
   }
 
   async function recoverSubmission(resend = true) {
@@ -1295,6 +1418,7 @@ export default function App() {
       }
       submissionAccepted(out);
       await refreshJobs();
+      if (activePage === "jobs") await loadHistory(true);
     } catch (e) {
       const serverField = typeof e.path === "string" ? e.path.replace(/^body\./, "").replace(/^variables\./, "") : "";
       if (serverField && (loadedWorkflow.current?.variable_keys || []).includes(serverField)) {
@@ -1709,21 +1833,76 @@ export default function App() {
       </section>
 
       <section hidden={activePage !== "jobs"} className="card jobs">
-        <div className="row">
-          <h2>3. Recent jobs</h2>
-          <button className="ghost" onClick={() => refreshJobs(true)}>Refresh all</button>
+        <div className="row history-heading">
+          <div><h2>Job history</h2><p className="hint">Saved Jobs and outputs are restored from the controller after a refresh.</p></div>
+          <div className="button-row">
+            <button className="ghost" onClick={() => { refreshJobs(true).catch(() => {}); loadHistory(true); }}>Refresh history</button>
+            <button className="ghost" disabled={comparisonIds.length !== 2} onClick={compareSelectedJobs}>Compare selected ({comparisonIds.length}/2)</button>
+          </div>
         </div>
-
+        <p className={`history-connection ${browserConnection}`} role="status">
+          Controller connection: {browserConnection === "connected" ? "Connected" : browserConnection === "disconnected" ? "Disconnected; saved Job state is unchanged" : "Checking"}
+          {lastJobsSync ? ` · Last data received ${new Date(lastJobsSync).toLocaleTimeString()}` : " · No successful history refresh yet"}
+        </p>
+        <form className="history-filters" onSubmit={event => { event.preventDefault(); setComparison(null); loadHistory(true); }}>
+          <label>Status
+            <select value={historyFilters.state} onChange={event => setHistoryFilters(previous => ({...previous, state: event.target.value}))}>
+              <option value="">All statuses</option><option value="pending">Queued</option><option value="running">Running</option>
+              <option value="finalizing">Saving output</option><option value="cancel_requested">Cancellation requested</option>
+              <option value="succeeded">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option>
+              <option value="stalled">Worker status uncertain</option><option value="submit_failed">Could not submit</option>
+            </select>
+          </label>
+          <label>Tool / Workflow
+            <select value={historyFilters.workflow_id} onChange={event => setHistoryFilters(previous => ({...previous, workflow_id: event.target.value}))}>
+              <option value="">All tools</option>{workflows.map(workflow => <option key={workflow.id} value={workflow.id}>{workflow.name || workflow.id}</option>)}
+            </select>
+          </label>
+          <label>Created after<input type="date" value={historyFilters.created_after}
+            onChange={event => setHistoryFilters(previous => ({...previous, created_after: event.target.value}))} /></label>
+          <label>Created before<input type="date" value={historyFilters.created_before}
+            onChange={event => setHistoryFilters(previous => ({...previous, created_before: event.target.value}))} /></label>
+          <label className="history-search">Search prompt<input type="search" value={historyFilters.q} maxLength={160}
+            onChange={event => setHistoryFilters(previous => ({...previous, q: event.target.value}))}
+            placeholder="Search saved prompts" /></label>
+          <div className="history-filter-actions">
+            <button type="submit" disabled={historyLoading}>{historyLoading ? "Searching…" : "Search"}</button>
+            <button type="button" className="ghost" disabled={historyLoading} onClick={() => {
+              const empty = {state: "", workflow_id: "", created_after: "", created_before: "", q: ""};
+              setHistoryFilters(empty); setComparison(null); setComparisonIds([]); loadHistory(true, empty);
+            }}>Clear filters</button>
+          </div>
+        </form>
+        <div className="history-count">Showing {historyItems.length} of {historyTotal} matching Jobs</div>
+        {historyError && <p className="validation" role="alert">{historyError}</p>}
+        {comparison && <section className="comparison-panel" aria-label="Job snapshot comparison">
+          <div className="row"><h3>Snapshot comparison</h3><button className="ghost" onClick={() => setComparison(null)}>Close comparison</button></div>
+          <p className="hint">Comparing {comparison.first_id} with {comparison.second_id}. Values come from each saved Job snapshot.</p>
+          <div className="comparison-scroll"><table><thead><tr><th>Setting</th><th>First Job</th><th>Second Job</th><th>Difference</th></tr></thead>
+            <tbody>{Object.keys(comparison.first || {}).map(key => {
+              const left = comparison.first[key]; const right = comparison.second[key];
+              const different = left !== right && JSON.stringify(left) !== JSON.stringify(right);
+              const format = value => value == null || value === "" ? "Not recorded" : typeof value === "object" ? JSON.stringify(value) : String(value);
+              return <tr key={key} className={different ? "comparison-different" : ""}><th>{key.replaceAll("_", " ")}</th>
+                <td dir="auto">{format(left)}</td><td dir="auto">{format(right)}</td><td>{different ? "Different" : "Same"}</td></tr>;
+            })}</tbody></table></div>
+          {comparison.differences?.length === 0 && <p className="hint">No recorded snapshot differences.</p>}
+        </section>}
         <div className="joblist">
-          {jobs.length === 0 && <p className="muted">No jobs yet.</p>}
-
-          {jobs.map(j => (
-            <Job key={j.id} job={j} fallbackPriority={priority}
+          {historyItems.length === 0 && !historyLoading && <p className="muted">No Jobs match these filters.</p>}
+          {historyItems.map(j => (
+            <Job key={j.id} job={j} fallbackPriority={priority} clock={clock}
               disabled={jobBusyId === j.id}
               adminReady={adminConfigured && tokenApplied}
-              onEdit={editJob} onRetry={retryJob} onDelete={hideJob} onRefresh={refreshOneJob} />
+              comparisonSelected={comparisonIds.includes(j.id)}
+              comparisonDisabled={comparisonIds.length === 2 && !comparisonIds.includes(j.id)}
+              onCompare={toggleComparison} onEdit={editJob} onRetry={retryJob} onCancel={cancelJob}
+              onDelete={hideJob} onRefresh={refreshOneJob} />
           ))}
         </div>
+        {historyCursor && <button className="ghost history-more" disabled={historyLoading} onClick={() => loadHistory(false)}>
+          {historyLoading ? "Loading…" : "Load more Jobs"}
+        </button>}
       </section>
       </>) : (
         <section className="card settings-card">
@@ -2007,7 +2186,22 @@ function VariableField({
   );
 }
 
-function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onDelete, onRefresh }) {
+function elapsedSeconds(job, field, clock) {
+  const seconds = job.timing?.[field];
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const active = !TERMINAL_STATES.has(job.state) && job.state !== "stalled";
+  const hasStarted = Boolean(job.started_at || job.attempt_history?.some(attempt => attempt.started_at));
+  const shouldTick = active && (field === "total_seconds" ||
+    (field === "worker_seconds" && hasStarted) ||
+    (field === "first_queue_wait_seconds" && !hasStarted));
+  const monotonicNow = globalThis.performance?.now?.();
+  const elapsedMs = Number.isFinite(monotonicNow) && Number.isFinite(job.client_received_monotonic)
+    ? monotonicNow - job.client_received_monotonic : clock - (job.client_received_at || clock);
+  return seconds + (shouldTick ? Math.max(0, elapsedMs) / 1000 : 0);
+}
+
+function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSelected,
+  comparisonDisabled, onCompare, onEdit, onRetry, onCancel, onDelete, onRefresh }) {
   const [images, setImages] = useState([]);
   const [imageError, setImageError] = useState("");
   const [loadingImages, setLoadingImages] = useState(false);
@@ -2030,28 +2224,80 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
     if (job.state === "succeeded") refreshImages();
   }, [job.id, job.state]);
 
-  const retryable = RETRYABLE_STATES.has(job.state) && job.variables !== null;
+  const retryable = RETRYABLE_STATES.has(job.state) && job.variables !== null &&
+    !(job.state === "stalled" && job.execution_mode === "direct");
   const canManage = adminReady && !disabled;
   const snapshot = job.snapshot || null;
+  const active = !TERMINAL_STATES.has(job.state) && job.state !== "stalled";
+  const progress = job.progress || null;
+  const percent = stagePercent(progress);
+  const prompt = snapshot?.positive_prompt ?? job.variables?.["prompt.positive"] ?? job.variables?.["prompt.user"] ?? "";
+  const opName = snapshot?.operation === "image_edit" ? "Image edit" :
+    snapshot?.operation ? String(snapshot.operation).replaceAll("_", " ") : job.workflow_id || "AI Job";
+  const modelName = snapshot?.model?.name || snapshot?.model_id || "Model not recorded";
+  const outputCount = job.output_summary?.available ?? job.assets?.filter(asset => asset.status === "available").length ?? 0;
+  const expectedOutputs = job.output_summary?.expected_count;
+  const failureActions = {
+    input: "Edit the inputs, then run a new Job.",
+    preparation: "Check the Workflow setup, then retry if the cause is resolved.",
+    capacity: "Wait for capacity, then retry.",
+    worker: "Review the saved error, then retry the same snapshot.",
+    output_transfer: "Refresh outputs first; retry only if no valid output was saved.",
+    communication: "Refresh the Job. Retry only after confirming the previous execution stopped."
+  };
+  const workerHeartbeat = job.communication?.worker_last_heartbeat_at;
+  const waitSeconds = elapsedSeconds(job, "first_queue_wait_seconds", clock);
+  const workerSeconds = elapsedSeconds(job, "worker_seconds", clock);
+  const totalSeconds = elapsedSeconds(job, "total_seconds", clock);
+
   return (
-    <div className="job">
-      <div className="job-top">
-        <div>
-          <strong>{job.workflow_id}</strong>
-          <div className="mono">{job.id}</div>
-          <div className="hint">Priority: {job.priority || fallbackPriority || ""}</div>
-          <div className="hint">Created: {job.created_at ? new Date(job.created_at).toLocaleString() : "unknown"}</div>
+    <article className={`job-card job-${job.state || "unknown"}`}>
+      <div className="job-card-heading">
+        <div className="job-title-wrap">
+          <div className="job-title-line"><strong>{opName}</strong><span className={`pill ${job.state || "unknown"}`}>{jobStateLabel(job.state)}</span></div>
+          <div className="job-model">{String(modelName).split(/[\\/]/).pop()} · {job.workflow_id || "Workflow not recorded"}</div>
+          {prompt && <p className="job-prompt" dir="auto">{String(prompt).trim().slice(0, 220)}{String(prompt).trim().length > 220 ? "…" : ""}</p>}
         </div>
-        <span className={`pill ${job.state}`}>{job.state}</span>
+        <div className="job-created">{job.created_at ? new Date(job.created_at).toLocaleString() : "Creation time unavailable"}</div>
       </div>
       {job.state === "stalled" && (
-        <p className="validation">Overdue — confirm the previous execution has stopped before retrying.</p>
+        <p className="validation">Worker status is uncertain. The previous execution may still be running; confirm it stopped before retrying.</p>
       )}
-      {job.error_text && <p className="validation">{job.error_text}</p>}
+      {job.state === "cancel_requested" && <p className="job-cancel-pending" role="status">Cancellation requested. Waiting for the Worker to confirm the ComfyUI interrupt.</p>}
+      {job.error_text && <div className="job-error" role="alert">
+        <strong>{job.error_category ? job.error_category.replaceAll("_", " ") : "Job error"}</strong>
+        <p>{job.error_text}</p>
+        {failureActions[job.error_category] && <span className="hint">{failureActions[job.error_category]}</span>}
+      </div>}
       {job.poll_warning && <p className="hint">{job.poll_warning}</p>}
+      <div className="job-stage" aria-live="polite">
+        <strong>{progress?.label || (job.state === "pending" ? "Waiting for a Worker" : jobStateLabel(job.state))}</strong>
+        {progress && percent !== null ? (
+          <div className="job-progress-block">
+            <div className="job-progress-caption"><span>{progress.label} · stage progress</span><span>{progress.value}/{progress.total} {progress.unit || ""} ({percent}%)</span></div>
+            <progress max="100" value={percent} aria-label={`${progress.label} stage progress`} aria-valuetext={`${progress.value} of ${progress.total} ${progress.unit || "steps"}`} />
+            <small>This is progress for the current stage, not the whole Job.</small>
+          </div>
+        ) : active && progress ? <div className="job-indeterminate"><span aria-hidden="true" />Stage in progress; this stage has no measurable percentage.</div> : null}
+      </div>
+      <div className="job-metrics">
+        <span><small>Queue wait to first attempt</small><strong>{formatDuration(waitSeconds)}</strong></span>
+        <span><small>Worker time</small><strong>{formatDuration(workerSeconds)}</strong></span>
+        <span><small>Total elapsed</small><strong>{formatDuration(totalSeconds)}</strong></span>
+        <span><small>Outputs</small><strong>{expectedOutputs == null ? outputCount : `${outputCount} / ${expectedOutputs}`}</strong></span>
+      </div>
+      {job.execution_mode === "direct" && <p className="job-worker-sync">
+        Worker: {workerHeartbeat ? `last heard ${new Date(workerHeartbeat).toLocaleTimeString()}` : "no heartbeat recorded"}
+        {job.communication?.overdue ? " · status may be out of date" : ""}
+      </p>}
       <div className="job-actions">
-        <button className="ghost" disabled={disabled} onClick={() => onEdit(job)}>Edit &amp; Run</button>
+        <label className="job-compare"><input type="checkbox" checked={comparisonSelected} disabled={comparisonDisabled || disabled}
+          onChange={() => onCompare(job)} /> Compare</label>
+        <button className="ghost" disabled={disabled} title="Load a copy of this Job's settings into the form; this Job stays unchanged." onClick={() => onEdit(job)}>Load settings to form</button>
         {retryable && <button className="ghost" disabled={!canManage} onClick={() => onRetry(job)}>Retry</button>}
+        {job.execution_mode === "direct" && ["pending", "running"].includes(job.state) &&
+          <button className="danger ghost" disabled={!canManage} onClick={() => onCancel(job)}>Cancel Job</button>}
+        {job.state === "cancel_requested" && <button className="danger ghost" disabled title="Waiting for Worker confirmation">Cancellation pending</button>}
         <button className="danger ghost" disabled={!canManage} onClick={() => onDelete(job)}>Remove</button>
         <button className="ghost" disabled={disabled} onClick={() => onRefresh(job)}>Refresh status</button>
         <button className="ghost" disabled={loadingImages} onClick={refreshImages}>
@@ -2060,7 +2306,7 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
       </div>
       {snapshot && (
         <details className="job-snapshot">
-          <summary>Settings used for this Job</summary>
+          <summary>Saved settings and execution details</summary>
           <p><strong>Operation:</strong> {snapshot.operation || "unknown"} · <strong>Workflow:</strong> {snapshot.workflow_id || job.workflow_id}
             {snapshot.workflow_version && <> · <strong>Version:</strong> {snapshot.workflow_version.slice(0, 12)}</>}</p>
           {snapshot.model?.name && <p><strong>Model:</strong> {String(snapshot.model.name).split(/[\\/]/).pop()}</p>}
@@ -2069,6 +2315,11 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
             {snapshot.output_spec?.count && <> · <strong>Count:</strong> {snapshot.output_spec.count}</>}</p>
           {snapshot.positive_prompt != null && <div><strong>Positive prompt</strong><pre className="prompt-preview" dir="auto">{snapshot.positive_prompt || "(empty)"}</pre></div>}
           {snapshot.negative_prompt != null && <div><strong>Negative prompt</strong><pre className="prompt-preview" dir="auto">{snapshot.negative_prompt || "(empty)"}</pre></div>}
+          {snapshot.parameters && Object.keys(snapshot.parameters).length > 0 && <details>
+            <summary>Effective parameters</summary>
+            <dl className="job-parameter-list">{Object.entries(snapshot.parameters).map(([key, value]) =>
+              <React.Fragment key={key}><dt>{key}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></React.Fragment>)}</dl>
+          </details>}
           {(snapshot.references || []).length > 0 && <div><strong>Reference images</strong><ol>{snapshot.references.map((reference, index) =>
             <li key={`${reference.variable}-${index}`}>{reference.label || reference.variable} · {reference.role} · slot {Number(reference.order) + 1}</li>)}</ol></div>}
           {(snapshot.loras || []).length > 0 && <div><strong>LoRAs recorded</strong><ul>{snapshot.loras.map((lora, index) =>
@@ -2079,6 +2330,27 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
             <summary>Saved Workflow structure</summary>
             <ol>{(snapshot.workflow_summary.nodes || []).map(node => <li key={node.node_id}>{node.label} <span className="mono">({node.category})</span></li>)}</ol>
           </details>}
+          <details>
+            <summary>Job and Attempt IDs</summary>
+            <p className="copyable-id"><span>Job: <code>{job.id}</code></span><button type="button" className="ghost" onClick={() => navigator.clipboard?.writeText(job.id)}>Copy</button></p>
+            {job.active_attempt_id && <p className="copyable-id"><span>Current Attempt: <code>{job.active_attempt_id}</code></span><button type="button" className="ghost" onClick={() => navigator.clipboard?.writeText(job.active_attempt_id)}>Copy</button></p>}
+            <p className="hint">Priority: {job.priority || fallbackPriority || "not recorded"}</p>
+            {(job.attempt_history || []).length > 0 && <ol className="job-attempt-list">{job.attempt_history.map(attempt =>
+              <li key={attempt.id}><strong>Attempt {attempt.sequence}</strong> · {jobStateLabel(attempt.state)}
+                {attempt.timing?.queue_wait_seconds != null && <> · Wait {formatDuration(attempt.timing.queue_wait_seconds)}</>}
+                {attempt.timing?.worker_seconds != null && <> · Worker {formatDuration(attempt.timing.worker_seconds)}</>}
+                {attempt.failure_reason && <p>{attempt.failure_reason}</p>}
+                <code>{attempt.id}</code>
+              </li>)}</ol>}
+            {(job.progress_history || []).length > 0 && <details>
+              <summary>Recent progress events ({job.progress_history.length})</summary>
+              <ol className="job-attempt-list">{job.progress_history.map(event =>
+                <li key={`${event.attempt_id}-${event.sequence}`}>{event.label}
+                  {event.value != null && <> · {event.value}/{event.total} {event.unit || ""}</>}
+                  {event.observed_at && <> · {new Date(event.observed_at).toLocaleTimeString()}</>}
+                </li>)}</ol>
+            </details>}
+          </details>
         </details>
       )}
       {images.length > 0 && (
@@ -2094,6 +2366,6 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
         </div>
       )}
       {imageError && <p className="hint">{imageError}</p>}
-    </div>
+    </article>
   );
 }

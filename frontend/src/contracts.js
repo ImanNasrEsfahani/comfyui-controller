@@ -5,12 +5,60 @@ export function mergeJob(current, incoming) {
   if (Number(incoming.version || 0) < Number(current.version || 0)) return current;
   if (Number(incoming.version || 0) === Number(current.version || 0) &&
       Date.parse(incoming.updated_at || 0) < Date.parse(current.updated_at || 0)) return current;
+  const sameAttempt = incoming.active_attempt_id && incoming.active_attempt_id === current.active_attempt_id;
+  if (sameAttempt && Number(incoming.progress?.sequence || 0) < Number(current.progress?.sequence || 0)) return current;
   return incoming;
 }
 
 export function mergeJobList(current, incoming) {
   const previous = new Map(current.map(job => [job.id, job]));
   return incoming.map(job => mergeJob(previous.get(job.id), job));
+}
+
+export function appendUniqueJobs(current, incoming) {
+  const result = [...current];
+  const positions = new Map(result.map((job, index) => [job.id, index]));
+  for (const job of incoming) {
+    const index = positions.get(job.id);
+    if (index === undefined) {
+      positions.set(job.id, result.length);
+      result.push(job);
+    } else {
+      result[index] = mergeJob(result[index], job);
+    }
+  }
+  return result;
+}
+
+export function stagePercent(progress) {
+  if (progress?.scope !== "stage" || !Number.isFinite(progress.value) ||
+      !Number.isFinite(progress.total) || progress.total <= 0 ||
+      progress.value < 0 || progress.value > progress.total) return null;
+  return Math.round((progress.value / progress.total) * 100);
+}
+
+export function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "Not recorded";
+  const value = Math.floor(seconds);
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const remainder = value % 60;
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${remainder}s`;
+  return `${remainder}s`;
+}
+
+export function jobStateLabel(state) {
+  const labels = {
+    submitting: "Submitting", pending: "Queued", queued: "Queued", waiting: "Waiting",
+    preparing: "Preparing", processing: "Processing", running: "Running",
+    finalizing: "Saving output", cancel_requested: "Cancellation requested",
+    cancelled: "Cancelled", succeeded: "Completed", failed: "Failed",
+    submit_failed: "Could not submit", stalled: "Worker status uncertain"
+  };
+  return labels[state] || "Status unavailable";
 }
 
 export function isStale(record, now = Date.now()) {

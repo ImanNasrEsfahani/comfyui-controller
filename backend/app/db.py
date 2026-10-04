@@ -272,7 +272,7 @@ def get_job(local_id):
         d["output"] = json.loads(raw) if raw else None
         var_raw = d.pop("variables_json", None)
         d["variables"] = json.loads(var_raw) if var_raw else None
-        return job_records.enrich(c, d)
+        return job_records.enrich(c, d, include_progress_history=True)
 
 
 def list_jobs(limit=50):
@@ -293,6 +293,53 @@ def list_jobs(limit=50):
             d["variables"] = json.loads(var_raw) if var_raw else None
             result.append(job_records.enrich(c, d))
     return result
+
+
+def history_page(*, limit=24, state=None, workflow_id=None, created_after=None,
+                 created_before=None, query=None, cursor_created_at=None, cursor_id=None):
+    """Return a stable, filtered page from the controller-owned job history."""
+    limit = max(1, min(int(limit), 100))
+    clauses = ["hidden=0"]
+    params = []
+    if state:
+        clauses.append("state=?")
+        params.append(state)
+    if workflow_id:
+        clauses.append("workflow_id=?")
+        params.append(workflow_id)
+    if created_after:
+        clauses.append("created_at>=?")
+        params.append(created_after)
+    if created_before:
+        clauses.append("created_at<=?")
+        params.append(created_before)
+    if query:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        clauses.append("(COALESCE(snapshot_json,'') || ' ' || COALESCE(variables_json,'') || ' ' || COALESCE(request_json,'') || ' ' || COALESCE(workflow_id,'')) LIKE ? ESCAPE '\\'")
+        params.append("%" + escaped + "%")
+    where = " AND ".join(clauses)
+    with connect() as c:
+        total = c.execute("SELECT COUNT(*) n FROM jobs WHERE " + where, params).fetchone()["n"]
+        page_clauses = list(clauses)
+        page_params = list(params)
+        if cursor_created_at is not None and cursor_id is not None:
+            page_clauses.append("(created_at<? OR (created_at=? AND id<?))")
+            page_params.extend([cursor_created_at, cursor_created_at, cursor_id])
+        rows = c.execute(
+            "SELECT * FROM jobs WHERE " + " AND ".join(page_clauses) +
+            " ORDER BY created_at DESC,id DESC LIMIT ?", page_params + [limit + 1]
+        ).fetchall()
+        has_more = len(rows) > limit
+        result = []
+        for row in rows[:limit]:
+            d = dict(row)
+            d["request"] = json.loads(d.pop("request_json"))
+            raw = d.pop("output_json")
+            d["output"] = json.loads(raw) if raw else None
+            var_raw = d.pop("variables_json", None)
+            d["variables"] = json.loads(var_raw) if var_raw else None
+            result.append(job_records.enrich(c, d))
+    return {"items": result, "total": total, "has_more": has_more}
 
 
 def hide_job(local_id):

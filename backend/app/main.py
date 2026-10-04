@@ -7,7 +7,9 @@ from typing import Any
 from uuid import uuid4
 from pathlib import Path
 from datetime import datetime, timezone
+import base64
 import hmac
+import json
 import os
 import re
 import secrets
@@ -392,6 +394,7 @@ def public_job(item: dict):
     data.pop("request_hash", None)
     data["contract_version"] = (data.get("snapshot") or {}).get("contract_version", 1) if data.get("snapshot") else 0
     data["last_updated_at"] = data["updated_at"]
+    data["error_category"] = classify_error(data.get("state"), data.get("error_text"))
     heartbeat_at = data.get("last_heartbeat")
     data["communication"] = {"source": "controller", "worker_last_heartbeat_at": datetime.fromtimestamp(heartbeat_at, timezone.utc).isoformat() if heartbeat_at else None,
                              "overdue": data.get("state") == "stalled"}
@@ -408,9 +411,131 @@ def public_job(item: dict):
     return data
 
 
+def classify_error(state, error):
+    if not error:
+        return None
+    message = str(error).lower()
+    if any(word in message for word in ("invalid variable", "missing required", "workflow changed", "input image")):
+        return "input"
+    if any(word in message for word in ("output file", "output validation", "r2", "storage", "upload", "presign")):
+        return "output_transfer"
+    if any(word in message for word in ("timeout", "temporarily unavailable", "connection", "heartbeat", "lease")):
+        return "communication"
+    if any(word in message for word in ("capacity", "replica", "queue is full", "gpu unavailable", "http 429", "insufficient capacity")):
+        return "capacity"
+    if state == "submit_failed":
+        return "preparation"
+    return "worker"
+
+
 @app.get("/api/jobs")
 def jobs(limit: int = 50):
     return [public_job(note_stale(item)) for item in db.list_jobs(limit)]
+
+
+def _history_time(value, name):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{name} must be an ISO-8601 date or timestamp")
+
+
+def _cursor_encode(value):
+    return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def _cursor_decode(value, filters):
+    if not value:
+        return None
+    if len(value) > 2048:
+        raise HTTPException(400, "Invalid history cursor")
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        decoded = json.loads(raw)
+        if (not isinstance(decoded, dict) or not isinstance(decoded.get("created_at"), str) or
+                not isinstance(decoded.get("id"), str) or
+                decoded.get("filters") != contracts.digest(filters)):
+            raise ValueError
+        return decoded
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raise HTTPException(400, "Invalid history cursor or filter set changed")
+
+
+@app.get("/api/jobs/history")
+def job_history(limit: int = 24, state: str | None = None, workflow_id: str | None = None,
+                created_after: str | None = None, created_before: str | None = None,
+                q: str | None = None, cursor: str | None = None):
+    states = {"submitting", "pending", "queued", "waiting", "preparing", "processing", "running",
+              "finalizing", "cancel_requested", "stalled", "succeeded", "failed", "cancelled", "submit_failed"}
+    if not 1 <= limit <= 100:
+        raise HTTPException(400, "limit must be between 1 and 100")
+    if state and state not in states:
+        raise HTTPException(400, "Unknown Job state filter")
+    if workflow_id and (len(workflow_id) > 80 or not re.fullmatch(r"[A-Za-z0-9._-]+", workflow_id)):
+        raise HTTPException(400, "Invalid Workflow filter")
+    search = (q or "").strip()
+    if len(search) > 160:
+        raise HTTPException(400, "Search text must be 160 characters or fewer")
+    after = _history_time(created_after, "created_after")
+    before = _history_time(created_before, "created_before")
+    if after and before and after > before:
+        raise HTTPException(400, "created_after must not be later than created_before")
+    filters = {"state": state, "workflow_id": workflow_id, "created_after": after,
+               "created_before": before, "q": search}
+    decoded = _cursor_decode(cursor, filters)
+    page = db.history_page(limit=limit, state=state, workflow_id=workflow_id,
+        created_after=after, created_before=before, query=search or None,
+        cursor_created_at=decoded["created_at"] if decoded else None,
+        cursor_id=decoded["id"] if decoded else None)
+    next_cursor = None
+    if page["has_more"] and page["items"]:
+        last = page["items"][-1]
+        next_cursor = _cursor_encode({"created_at": last["created_at"], "id": last["id"],
+                                      "filters": contracts.digest(filters)})
+    items = [public_job(note_stale(item)) for item in page["items"]]
+    return {"items": items, "count": len(items), "total": page["total"], "next_cursor": next_cursor}
+
+
+def _comparison_snapshot(item):
+    snapshot = item.get("snapshot") or {}
+    references = [{"role": ref.get("role"), "label": ref.get("label"),
+                   "slot": ref.get("order"), "recorded": True}
+                  for ref in snapshot.get("references", []) if isinstance(ref, dict)]
+    return {
+        "workflow_id": snapshot.get("workflow_id") or item.get("workflow_id"),
+        "workflow_version": snapshot.get("workflow_version"),
+        "operation": snapshot.get("operation"),
+        "model": snapshot.get("model"),
+        "positive_prompt": snapshot.get("positive_prompt"),
+        "negative_prompt": snapshot.get("negative_prompt"),
+        "output_spec": snapshot.get("output_spec"),
+        "seed": snapshot.get("seed"),
+        "seed_mode": snapshot.get("seed_mode"),
+        "parameters": snapshot.get("parameters"),
+        "loras": snapshot.get("loras"),
+        "references": references if snapshot else None,
+        "worker_seconds": item.get("timing", {}).get("worker_seconds"),
+        "outputs": item.get("output_summary", {}).get("available"),
+    }
+
+
+@app.get("/api/job-comparison")
+def compare_jobs(first_id: str, second_id: str):
+    if first_id == second_id:
+        raise HTTPException(400, "Choose two different Jobs to compare")
+    first, second = db.get_job(first_id), db.get_job(second_id)
+    if not first or first.get("hidden") or not second or second.get("hidden"):
+        raise HTTPException(404, "One or both Jobs are not available")
+    left, right = _comparison_snapshot(public_job(first)), _comparison_snapshot(public_job(second))
+    differences = [{"field": key, "first": left[key], "second": right[key]}
+                   for key in left if left[key] != right[key]]
+    return {"first_id": first_id, "second_id": second_id,
+            "first": left, "second": right, "differences": differences}
 
 
 @app.get("/api/jobs/{local_id}")
@@ -493,6 +618,24 @@ def retry_job(local_id: str, body: RetryIn, x_internal_token: str | None = Heade
                 db.update_job(local_id, state="submit_failed", error="Retry submission outcome is unknown: " + type(exc).__name__)
         return public_job(db.get_job(local_id))
     return public_job(submit_job(item["workflow_id"], item["variables"], item.get("priority"), source_job_id=local_id))
+
+
+@app.post("/api/jobs/{local_id}/cancel")
+def cancel_job(local_id: str, x_internal_token: str | None = Header(default=None)):
+    check_admin_token(x_internal_token)
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    if item.get("execution_mode") != "direct":
+        raise HTTPException(409, "Per-Job cancellation is not available for this legacy Salad Queue Job")
+    result = direct_queue.request_cancel(local_id)
+    if result is None:
+        raise HTTPException(404, "job not found")
+    if result.get("unavailable"):
+        if result["state"] == "finalizing":
+            raise HTTPException(409, "The Worker has finished processing and is validating outputs; cancellation is no longer available")
+        raise HTTPException(409, "Cancellation cannot be confirmed for this Job state; refresh the Job before acting")
+    return public_job(db.get_job(local_id))
 
 
 @app.delete("/api/jobs/{local_id}", status_code=204)
@@ -617,6 +760,17 @@ class WorkerFailure(WorkerLease):
     retryable: bool = False
 
 
+class WorkerProgress(WorkerLease):
+    sequence: int = Field(ge=1, le=2147483647)
+    phase: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    label: str = Field(min_length=1, max_length=120)
+    value: float | None = Field(default=None, ge=0)
+    total: float | None = Field(default=None, gt=0)
+    unit: str | None = Field(default=None, max_length=16)
+    scope: str = "stage"
+    source: str = "worker"
+
+
 @app.post("/api/worker/hello")
 def worker_hello(body: WorkerHello, x_worker_token: str | None = Header(default=None)):
     check_worker_token(x_worker_token)
@@ -636,9 +790,29 @@ def worker_claim(body: WorkerHello, x_worker_token: str | None = Header(default=
 def worker_heartbeat(local_id: str, body: WorkerLease,
                      x_worker_token: str | None = Header(default=None)):
     check_worker_token(x_worker_token)
-    if not direct_queue.heartbeat(local_id, body.lease_token, body.attempt_id):
+    result = direct_queue.heartbeat_control(local_id, body.lease_token, body.attempt_id)
+    if not result:
         raise HTTPException(409, "lease expired or is no longer owned by this worker")
+    return result
+
+
+@app.post("/api/worker/progress/{local_id}")
+def worker_progress(local_id: str, body: WorkerProgress,
+                    x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    event = body.model_dump(exclude={"lease_token", "attempt_id"})
+    if not direct_queue.record_progress(local_id, body.lease_token, body.attempt_id, event):
+        raise HTTPException(409, "progress event is stale, invalid, or outside the active attempt")
     return {"accepted": True}
+
+
+@app.post("/api/worker/cancelled/{local_id}")
+def worker_cancelled(local_id: str, body: WorkerLease,
+                     x_worker_token: str | None = Header(default=None)):
+    check_worker_token(x_worker_token)
+    if not direct_queue.confirm_cancel(local_id, body.lease_token, body.attempt_id):
+        raise HTTPException(409, "cancellation confirmation does not match the active requested attempt")
+    return {"accepted": True, "state": "cancelled"}
 
 
 @app.post("/api/worker/complete/{local_id}")

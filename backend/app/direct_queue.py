@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import time
 from uuid import uuid4
 
@@ -81,17 +83,28 @@ def counters() -> dict:
     result = {"pending": 0, "running": 0, "failed": 0, "succeeded": 0}
     result.update({r["state"]: r["n"] for r in rows})
     # Finalizing still owns the single GPU lease and blocks dispatch/stop.
-    result["running"] += result.get("finalizing", 0)
+    result["running"] += result.get("finalizing", 0) + result.get("cancel_requested", 0)
     return result
 
 
 def _recover_expired(c, now: float):
     rows = c.execute(
-        "SELECT id,attempts,active_attempt_id FROM jobs WHERE execution_mode=? AND state IN ('running','finalizing') "
+        "SELECT id,attempts,active_attempt_id,state FROM jobs WHERE execution_mode=? AND state IN ('running','finalizing','cancel_requested') "
         "AND lease_deadline IS NOT NULL AND lease_deadline < ?",
         (DIRECT_MODE, now),
     ).fetchall()
     for row in rows:
+        if row["state"] == "cancel_requested":
+            observed = _now()
+            reason = "Cancellation was not confirmed before the Worker lease expired; the remote execution may still be active"
+            job_records.end_attempt(c, row["active_attempt_id"], "cancel_unconfirmed", observed, reason)
+            c.execute(
+                """UPDATE jobs SET state='stalled',lease_token_hash=NULL,worker_id=NULL,
+                   lease_deadline=NULL,last_heartbeat=NULL,error_text=?,updated_at=?,
+                   active_attempt_id=NULL WHERE id=? AND state='cancel_requested'""",
+                (reason, observed, row["id"]),
+            )
+            continue
         exhausted = row["attempts"] >= max_attempts()
         observed = _now()
         reason = "Worker heartbeat expired; retry limit reached" if exhausted else "Worker heartbeat expired; scheduled for retry"
@@ -126,7 +139,7 @@ def claim(worker_id: str) -> dict | None:
         now = _time()
         _recover_expired(c, now)
         # At most one *active* direct job, even if multiple workers race.
-        if c.execute("SELECT 1 FROM jobs WHERE execution_mode=? AND state IN ('running','finalizing') LIMIT 1",
+        if c.execute("SELECT 1 FROM jobs WHERE execution_mode=? AND state IN ('running','finalizing','cancel_requested') LIMIT 1",
                      (DIRECT_MODE,)).fetchone():
             return None
         row = c.execute(
@@ -163,22 +176,132 @@ def _fenced(c, job_id: str, token: str, attempt_id=None):
         return None
     row = c.execute(
         """SELECT * FROM jobs WHERE id=? AND execution_mode=?
-           AND state IN ('running','finalizing') AND lease_token_hash=?""",
+           AND state IN ('running','finalizing','cancel_requested') AND lease_token_hash=?""",
         (job_id, DIRECT_MODE, _digest(token)),
     ).fetchone()
     return row if row and float(row["lease_deadline"] or 0) >= _time() and (attempt_id is None or attempt_id == row["active_attempt_id"]) else None
 
 
-def heartbeat(job_id: str, token: str, attempt_id=None) -> bool:
+def heartbeat_control(job_id: str, token: str, attempt_id=None) -> dict | None:
     require_enabled()
     with db.connect() as c:
         c.execute("BEGIN IMMEDIATE")
-        if not _fenced(c, job_id, token, attempt_id):
-            return False
+        row = _fenced(c, job_id, token, attempt_id)
+        if not row:
+            return None
         now = _time()
         c.execute(
             "UPDATE jobs SET lease_deadline=?,last_heartbeat=?,updated_at=? WHERE id=?",
             (now + lease_seconds(), now, _now(), job_id),
+        )
+        return {"accepted": True, "cancel_requested": row["state"] == "cancel_requested"}
+
+
+def heartbeat(job_id: str, token: str, attempt_id=None) -> bool:
+    return heartbeat_control(job_id, token, attempt_id) is not None
+
+
+def record_progress(job_id: str, token: str, attempt_id: str, event: dict) -> bool:
+    """Persist monotonic, attempt-fenced progress without changing job state."""
+    require_enabled()
+    if not isinstance(event, dict) or not isinstance(attempt_id, str) or not attempt_id or len(attempt_id) > 80:
+        return False
+    sequence = event.get("sequence")
+    phase = event.get("phase")
+    label = event.get("label")
+    value, total = event.get("value"), event.get("total")
+    unit = event.get("unit")
+    scope = event.get("scope", "stage")
+    source = event.get("source", "worker")
+    if (not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1 or
+            not isinstance(phase, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", phase) or
+            not isinstance(label, str) or not label.strip() or len(label) > 120 or
+            scope != "stage" or source not in {"worker", "comfyui"}):
+        return False
+    if unit not in {None, "steps", "nodes", "files", "bytes"}:
+        return False
+    if (value is None) != (total is None):
+        return False
+    if value is not None:
+        if (not isinstance(value, (int, float)) or isinstance(value, bool) or
+                not isinstance(total, (int, float)) or isinstance(total, bool) or
+                not math.isfinite(value) or not math.isfinite(total) or
+                value < 0 or total <= 0 or value > total or not unit):
+            return False
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = _fenced(c, job_id, token, attempt_id)
+        if not row or row["state"] not in {"running", "cancel_requested"}:
+            return False
+        previous = c.execute("SELECT sequence FROM job_progress WHERE job_id=? AND attempt_id=?",
+                             (job_id, attempt_id)).fetchone()
+        if previous and sequence <= previous["sequence"]:
+            return False
+        observed = _now()
+        c.execute(
+            """INSERT INTO job_progress_events(job_id,attempt_id,sequence,phase,label,value,total,unit,scope,source,observed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (job_id, attempt_id, sequence, phase, label.strip(), value, total, unit,
+             scope, source, observed),
+        )
+        c.execute(
+            """INSERT INTO job_progress(job_id,attempt_id,sequence,phase,label,value,total,unit,scope,source,observed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(job_id,attempt_id) DO UPDATE SET sequence=excluded.sequence,
+                 phase=excluded.phase,label=excluded.label,value=excluded.value,total=excluded.total,
+                 unit=excluded.unit,scope=excluded.scope,source=excluded.source,observed_at=excluded.observed_at""",
+            (job_id, attempt_id, sequence, phase, label.strip(), value, total, unit,
+             scope, source, observed),
+        )
+    return True
+
+
+def request_cancel(job_id: str) -> dict | None:
+    """Cancel a queued job immediately or request an active Worker interrupt."""
+    require_enabled()
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT * FROM jobs WHERE id=? AND execution_mode=? AND hidden=0",
+                        (job_id, DIRECT_MODE)).fetchone()
+        if not row:
+            return None
+        state = row["state"]
+        if state == "pending":
+            now = _now()
+            c.execute("UPDATE jobs SET state='cancelled',finished_at=?,updated_at=? WHERE id=? AND state='pending'",
+                      (now, now, job_id))
+            return {"state": "cancelled", "confirmed": True}
+        if state == "cancel_requested":
+            return {"state": state, "confirmed": False}
+        if state == "running":
+            now = _now()
+            c.execute("UPDATE jobs SET state='cancel_requested',updated_at=? WHERE id=? AND state='running'",
+                      (now, job_id))
+            return {"state": "cancel_requested", "confirmed": False}
+        if state == "finalizing":
+            return {"state": state, "confirmed": False, "unavailable": True}
+        if state in job_records.TERMINAL:
+            return {"state": state, "confirmed": state == "cancelled", "already_finished": True}
+        if state == "stalled":
+            return {"state": state, "confirmed": False, "unavailable": True}
+        return {"state": state, "confirmed": False, "unavailable": True}
+
+
+def confirm_cancel(job_id: str, token: str, attempt_id=None) -> bool:
+    """Accept worker confirmation only for its current, cancellation-requested lease."""
+    require_enabled()
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = _fenced(c, job_id, token, attempt_id)
+        if not row or row["state"] != "cancel_requested":
+            return False
+        now = _now()
+        job_records.end_attempt(c, row["active_attempt_id"], "cancelled", now, "Cancellation confirmed by Worker")
+        c.execute(
+            """UPDATE jobs SET state='cancelled',finished_at=?,error_text=NULL,
+               lease_token_hash=NULL,worker_id=NULL,lease_deadline=NULL,last_heartbeat=NULL,
+               updated_at=? WHERE id=? AND state='cancel_requested'""",
+            (now, now, job_id),
         )
     return True
 
@@ -195,7 +318,7 @@ def finish(job_id: str, token: str, output: dict, attempt_id=None) -> bool:
             # Identical redelivery is acknowledged without changing anything.
             previous = c.execute("SELECT result_hash FROM job_attempts WHERE job_id=? AND lease_token_hash=? AND state='succeeded' AND (? IS NULL OR id=?)", (job_id, _digest(token), attempt_id, attempt_id)).fetchone()
             return bool(previous and previous["result_hash"] == result_hash)
-        if row["state"] == "running":
+        if row["state"] in {"running", "cancel_requested"}:
             c.execute("UPDATE jobs SET state='finalizing',updated_at=? WHERE id=?", (_now(), job_id))
             c.execute("UPDATE job_attempts SET state='finalizing' WHERE id=? AND finished_at IS NULL", (row["active_attempt_id"],))
         active_id = row["active_attempt_id"]
@@ -229,7 +352,7 @@ def fail(job_id: str, token: str, message: str, retryable: bool, attempt_id=None
         row = _fenced(c, job_id, token, attempt_id)
         if not row:
             return False
-        can_retry = retryable and row["attempts"] < max_attempts()
+        can_retry = retryable and row["attempts"] < max_attempts() and row["state"] != "cancel_requested"
         observed = _now()
         job_records.end_attempt(c, row["active_attempt_id"], "failed", observed, str(message)[:600])
         c.execute(
@@ -247,11 +370,12 @@ def fail(job_id: str, token: str, message: str, retryable: bool, attempt_id=None
 
 def cancel_pending(job_id: str) -> bool:
     require_enabled()
+    now = _now()
     with db.connect() as c:
         return c.execute(
             """UPDATE jobs SET state='cancelled',updated_at=?,finished_at=? WHERE id=?
                AND execution_mode=? AND state='pending'""",
-            (_now(), _now(), job_id, DIRECT_MODE),
+            (now, now, job_id, DIRECT_MODE),
         ).rowcount == 1
 
 

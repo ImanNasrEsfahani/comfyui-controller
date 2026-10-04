@@ -1,13 +1,14 @@
 """PDF-44/46/47 additive SQLite records and guarded, versioned transitions."""
 import json
 from uuid import uuid4
+from datetime import datetime, timezone
 
 from .contracts import ContractError
 
 STATUS = {"pending": "queued", "submitting": "accepted", "processing": "running",
           "waiting": "queued", "submit_failed": "failed"}
 TERMINAL = {"succeeded", "failed", "cancelled", "submit_failed"}
-ACTIVE = {"running", "finalizing"}
+ACTIVE = {"running", "finalizing", "cancel_requested"}
 TRANSITIONS = {
     "accepted": {"queued", "pending", "failed", "cancelled"},
     "submitting": {"pending", "queued", "waiting", "preparing", "processing", "running", "finalizing", "succeeded", "failed", "cancelled", "submit_failed", "stalled"},
@@ -18,7 +19,7 @@ TRANSITIONS = {
     "processing": {"running", "finalizing", "succeeded", "failed", "cancel_requested", "cancelled", "stalled"},
     "running": {"finalizing", "succeeded", "failed", "cancel_requested", "cancelled", "stalled"},
     "finalizing": {"succeeded", "failed", "cancel_requested", "cancelled"},
-    "cancel_requested": {"cancelled", "succeeded", "failed"},
+    "cancel_requested": {"finalizing", "cancelled", "succeeded", "failed", "stalled"},
     # Legacy 'stalled' is an overdue communication observation, not a failure.
     "stalled": {"pending", "queued", "waiting", "preparing", "processing", "running", "finalizing", "succeeded", "failed", "cancelled"},
 }
@@ -56,6 +57,21 @@ def migrate(c):
         previous_state TEXT, state TEXT NOT NULL, reason TEXT, observed_at TEXT NOT NULL,
         PRIMARY KEY(job_id,version)
       );
+      CREATE TABLE IF NOT EXISTS job_progress (
+        job_id TEXT NOT NULL, attempt_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+        phase TEXT NOT NULL, label TEXT NOT NULL, value REAL, total REAL,
+        unit TEXT, scope TEXT NOT NULL, source TEXT NOT NULL, observed_at TEXT NOT NULL,
+        PRIMARY KEY(job_id,attempt_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_job_progress_attempt ON job_progress(job_id,attempt_id,sequence);
+      CREATE TABLE IF NOT EXISTS job_progress_events (
+        job_id TEXT NOT NULL, attempt_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+        phase TEXT NOT NULL, label TEXT NOT NULL, value REAL, total REAL,
+        unit TEXT, scope TEXT NOT NULL, source TEXT NOT NULL, observed_at TEXT NOT NULL,
+        PRIMARY KEY(job_id,attempt_id,sequence)
+      );
+      CREATE INDEX IF NOT EXISTS idx_job_progress_events_recent
+        ON job_progress_events(job_id,attempt_id,sequence DESC);
       CREATE TABLE IF NOT EXISTS instance_observations (
         group_name TEXT PRIMARY KEY, version INTEGER NOT NULL, updated_at TEXT NOT NULL,
         snapshot_json TEXT NOT NULL
@@ -79,7 +95,8 @@ def migrate(c):
     # Requeue requires the explicit retry/recovery generation fence. Failed and
     # cancelled can never be reopened by a late provider update.
     retry = "(NEW.retry_generation=OLD.retry_generation+1 AND ((NEW.state='pending' AND OLD.execution_mode='direct' AND OLD.state IN ('failed','cancelled','running','finalizing')) OR (NEW.state='submitting' AND OLD.execution_mode='salad_queue' AND OLD.state IN ('failed','cancelled','submit_failed','stalled'))))"
-    c.execute(f"""CREATE TRIGGER IF NOT EXISTS jobs_transition_guard BEFORE UPDATE OF state ON jobs
+    c.execute("DROP TRIGGER IF EXISTS jobs_transition_guard")
+    c.execute(f"""CREATE TRIGGER jobs_transition_guard BEFORE UPDATE OF state ON jobs
       WHEN NEW.state!=OLD.state AND NOT ({allowed} OR {retry})
       BEGIN SELECT RAISE(ABORT,'invalid Job transition'); END""")
     c.executescript("""
@@ -142,16 +159,73 @@ def end_attempt(c, attempt_id, state, now, reason=None, result_hash=None):
                   (state, now, reason, result_hash, attempt_id))
 
 
-def enrich(c, item):
+def enrich(c, item, *, include_progress_history=False):
     raw = item.pop("snapshot_json", None)
     item["snapshot"] = json.loads(raw) if raw else None
     item["job_id"] = item["id"]
     item["status"] = STATUS.get(item["state"], item["state"])
     item["error_summary"] = item.get("error_text")
-    item["attempt_history"] = [dict(r) for r in c.execute(
+    attempts = [dict(r) for r in c.execute(
         "SELECT id,job_id,sequence,previous_attempt_id,worker_id,provider_job_id,created_at,started_at,finished_at,state,failure_reason FROM job_attempts WHERE job_id=? ORDER BY sequence", (item["id"],))]
+    progress_by_attempt = {r["attempt_id"]: dict(r) for r in c.execute(
+        "SELECT * FROM job_progress WHERE job_id=?", (item["id"],))}
+    for attempt in attempts:
+        attempt["progress"] = progress_by_attempt.get(attempt["id"])
+        attempt["timing"] = attempt_timing(attempt, item.get("state"), item.get("active_attempt_id"))
+    item["attempt_history"] = attempts
     item["assets"] = [dict(r) for r in c.execute("SELECT * FROM job_assets WHERE job_id=? ORDER BY asset_id", (item["id"],))]
     item["timeline"] = [dict(r) for r in c.execute("SELECT * FROM job_events WHERE job_id=? AND (previous_state IS NULL OR state!=previous_state) ORDER BY version", (item["id"],))]
-    # No progress numbers are available from the current synchronous worker.
-    item["progress"] = {"value": None, "unit": None, "scope": "job", "attempt_id": item.get("active_attempt_id"), "source": None}
+    item["progress"] = progress_by_attempt.get(item.get("active_attempt_id"))
+    item["progress_history"] = []
+    if include_progress_history and item.get("active_attempt_id"):
+        item["progress_history"] = [dict(r) for r in c.execute(
+            "SELECT * FROM (SELECT * FROM job_progress_events WHERE job_id=? AND attempt_id=? ORDER BY sequence DESC LIMIT 50) ORDER BY sequence",
+            (item["id"], item["active_attempt_id"]))]
+    item["timing"] = job_timing(item, attempts)
     return item
+
+
+def _parse_time(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _seconds(start, end):
+    a, b = _parse_time(start), _parse_time(end)
+    return max(0.0, (b - a).total_seconds()) if a and b else None
+
+
+def attempt_timing(attempt, job_state=None, active_attempt_id=None):
+    end = attempt.get("finished_at")
+    if not end and attempt.get("id") == active_attempt_id and job_state in ACTIVE:
+        end = datetime.now(timezone.utc).isoformat()
+    return {
+        "queue_wait_seconds": _seconds(attempt.get("created_at"), attempt.get("started_at")),
+        "worker_seconds": _seconds(attempt.get("started_at"), end),
+    }
+
+
+def job_timing(item, attempts):
+    created = item.get("created_at")
+    first_start = next((a.get("started_at") for a in attempts if a.get("started_at")), None)
+    active = item.get("state") in ACTIVE or item.get("state") in {"pending", "submitting", "queued", "waiting", "preparing", "processing"}
+    now = datetime.now(timezone.utc).isoformat()
+    queue_end = first_start or (now if active else None)
+    total_end = item.get("finished_at") or (now if active else None)
+    durations = [a.get("timing", {}).get("worker_seconds") for a in attempts]
+    waits = [a.get("timing", {}).get("queue_wait_seconds") for a in attempts]
+    return {
+        "created_at": created,
+        "queued_at": item.get("queued_at"),
+        "started_at": item.get("started_at"),
+        "finished_at": item.get("finished_at"),
+        "first_queue_wait_seconds": _seconds(created, queue_end),
+        "worker_seconds": round(sum(value for value in durations if value is not None), 3) if any(value is not None for value in durations) else None,
+        "total_seconds": _seconds(created, total_end),
+        "attempt_wait_seconds": round(sum(value for value in waits if value is not None), 3) if any(value is not None for value in waits) else None,
+    }

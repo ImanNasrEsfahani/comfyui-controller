@@ -25,6 +25,9 @@ RUN apt-get update && \
 ENV PIP_CONSTRAINT=/opt/pytorch-constraints.txt
 ENV UV_CONSTRAINT=/opt/pytorch-constraints.txt
 
+# Subscribe to ComfyUI's native progress and execution interruption events.
+RUN python -m pip install --no-cache-dir "websocket-client==1.8.0"
+
 RUN git clone --filter=blob:none "${QVR_REPO}" /opt/qvr && \
     git -C /opt/qvr checkout --detach "${QVR_COMMIT}"
 
