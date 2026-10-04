@@ -166,8 +166,14 @@ def validate_image_references(variables, optional_keys=()):
             continue
         uri = urlparse(value) if isinstance(value, str) else None
         path = (uri.path or "").lstrip("/").split("/") if uri else []
+        valid_input = bool(uri and uri.scheme == "s3" and uri.netloc == settings.r2_bucket
+            and len(path) >= 3 and path[0] == "inputs" and all(path[1:]))
+        valid_output = False
+        if uri and uri.scheme == "s3" and uri.netloc == settings.r2_bucket and len(path) >= 4 and path[0] == "outputs" and all(path[1:]):
+            from . import db
+            valid_output = db.asset_for_storage_key("/".join(path)) is not None
         if (not uri or uri.scheme != "s3" or uri.netloc != settings.r2_bucket
-                or len(path) < 3 or path[0] != "inputs" or not all(path[1:])
+                or not (valid_input or valid_output)
                 or uri.query or uri.fragment or uri.username or uri.password):
             raise ContractError(
                 "invalid_reference",
@@ -245,12 +251,19 @@ def effective_snapshot(wf, variables, priority, *, client_request_id=None, seed_
         uri = urlparse(value)
         parts = uri.path.lstrip("/").split("/")
         asset_id = parts[1] if uri.scheme == "s3" and uri.netloc == settings.r2_bucket and len(parts) >= 3 and parts[0] == "inputs" else None
+        source_job_id = None
+        if uri.scheme == "s3" and uri.netloc == settings.r2_bucket and len(parts) >= 4 and parts[0] == "outputs":
+            from . import db
+            source_asset = db.asset_for_storage_key("/".join(parts))
+            if source_asset:
+                asset_id = source_asset["asset_id"]
+                source_job_id = source_asset["job_id"]
         slot = reference_slots.get(key, {})
         order = execution_positions.get(key, slot.get("order", len(references)))
         if reference_order is not None and key in canonical_order:
             # Values were remapped into graph slots before snapshot creation.
             order = canonical_order.index(key)
-        references.append({"asset_id": asset_id, "role": slot.get("role", "reference"), "order": order,
+        references.append({"asset_id": asset_id, "source_job_id": source_job_id, "role": slot.get("role", "reference"), "order": order,
                            "label": slot.get("label", key), "variable": key, "uri": value})
     references.sort(key=lambda item: item["order"])
 

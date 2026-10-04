@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
+from io import BytesIO
 
 TEST_ENV = {
     "APP_NAME": "axis-test", "DB_PATH": "/tmp/axis-test-unused.db", "MAX_UPLOAD_MB": "10",
@@ -71,6 +73,67 @@ def fake_store(monkeypatch, unavailable=()):
                 def paginate(self, **kwargs): return [{"Contents": []}]
             return Pages()
     monkeypatch.setattr(storage, "client", lambda: Store())
+
+
+def _png_bytes():
+    content = BytesIO()
+    Image.new("RGB", (12, 8), (40, 90, 140)).save(content, format="PNG")
+    return content.getvalue()
+
+
+def test_upload_checks_actual_image_bytes_type_size_and_persists_metadata(monkeypatch):
+    transferred = []
+    monkeypatch.setattr(storage, "upload_fileobj", lambda stream, key, content_type: transferred.append((stream.read(), key, content_type)))
+    png = _png_bytes()
+    with TestClient(app) as client:
+        valid = client.post("/api/uploads", headers=ADMIN, files={"file": ("sample.png", png, "image/png")})
+        corrupt = client.post("/api/uploads", headers=ADMIN, files={"file": ("fake.png", b"not an image", "image/png")})
+        mismatch = client.post("/api/uploads", headers=ADMIN, files={"file": ("renamed.jpg", png, "image/jpeg")})
+    assert valid.status_code == 200, valid.text
+    data = valid.json()
+    assert data["mime_type"] == "image/png" and data["width"] == 12 and data["height"] == 8
+    assert data["size_bytes"] == len(png) and data["s3_uri"].endswith("/sample.png")
+    assert len(transferred) == 1 and transferred[0][0] == png and transferred[0][2] == "image/png"
+    with db.connect() as conn:
+        asset = conn.execute("SELECT * FROM input_assets WHERE asset_id=?", (data["asset_id"],)).fetchone()
+    assert asset and asset["mime_type"] == "image/png" and asset["width"] == 12 and asset["size_bytes"] == len(png)
+    assert corrupt.status_code == 422 and mismatch.status_code == 422
+
+
+def test_upload_rejects_files_over_configured_limit(monkeypatch):
+    oversized = b"x" * (settings.max_upload_mb * 1024 * 1024 + 1)
+    with TestClient(app) as client:
+        response = client.post("/api/uploads", headers=ADMIN, files={"file": ("large.png", oversized, "image/png")})
+    assert response.status_code == 413
+
+
+def test_verified_output_can_be_reused_as_reference_and_download_is_job_scoped(monkeypatch):
+    source = submit()
+    key = f"outputs/{source['id']}/attempt-a/generated.png"
+    asset = {"asset_id": "verified-output-1", "job_id": source["id"], "attempt_id": "attempt-a",
+        "storage_key": key, "media_type": "image", "mime_type": "image/png", "width": 12, "height": 8,
+        "size_bytes": 96, "duration_seconds": None, "frame_rate": None, "status": "available",
+        "verified_at": db.utcnow(), "error_code": None, "created_at": db.utcnow()}
+    with db.connect() as conn:
+        from app.job_records import save_assets
+        save_assets(conn, [asset])
+    workflow = {"1": {"class_type": "LoadImage", "inputs": {"image": "{{input.image_1}}"}},
+                "2": {"class_type": "Test", "inputs": {"text": "{{prompt.user}}"}}}
+    db.save_workflow("image-wf", "Image workflow", workflow)
+    uri = f"s3://{settings.r2_bucket}/{key}"
+    request_body = {"contract_version": 1, "client_request_id": "reuse-output", "workflow_id": "image-wf",
+        "workflow_version": contracts.digest(workflow), "priority": "medium",
+        "variables": {"prompt.user": "reuse", "input.image_1": uri}}
+    monkeypatch.setattr(storage, "presign_get", lambda storage_key, *args, **kwargs: "https://signed.invalid/download")
+    with TestClient(app) as client:
+        accepted = client.post("/api/jobs", json=request_body, headers=ADMIN)
+        downloaded = client.get(f"/api/jobs/{source['id']}/assets/verified-output-1/download", follow_redirects=False)
+        wrong_job = client.get(f"/api/jobs/{source['id']}/assets/not-this-asset/download", follow_redirects=False)
+    assert accepted.status_code == 200, accepted.text
+    reference = accepted.json()["snapshot"]["references"][0]
+    assert reference["uri"] == uri and reference["asset_id"] == "verified-output-1" and reference["source_job_id"] == source["id"]
+    assert downloaded.status_code == 307 and downloaded.headers["location"] == "https://signed.invalid/download"
+    assert wrong_job.status_code == 404
 
 
 def complete(job, claim, filenames=("image.png",)):

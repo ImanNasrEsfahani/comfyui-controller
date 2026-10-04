@@ -130,6 +130,19 @@ def activity_counts(c=None):
     }
 
 
+def save_input_asset(asset):
+    with connect() as c:
+        c.execute("""INSERT INTO input_assets(asset_id,storage_key,mime_type,size_bytes,width,height,created_at)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(asset_id) DO NOTHING""",
+            (asset["asset_id"], asset["storage_key"], asset["mime_type"], asset["size_bytes"],
+             asset["width"], asset["height"], asset["created_at"]))
+
+
+def asset_for_storage_key(storage_key):
+    with connect() as c:
+        return job_records.asset_for_storage_key(c, storage_key)
+
+
 def list_workflows():
     with connect() as c:
         rows = c.execute(

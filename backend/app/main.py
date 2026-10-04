@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from typing import Any
 from uuid import uuid4
@@ -14,6 +15,9 @@ import os
 import re
 import secrets
 import httpx
+import io
+import warnings
+from PIL import Image, UnidentifiedImageError
 
 from .config import settings
 from . import db, storage, salad, salad_control, job_lifecycle, settings_store, direct_queue, contracts
@@ -196,23 +200,63 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
     upload_id = str(uuid4())
     filename = safe_name(file.filename)
     key = f"inputs/{upload_id}/{filename}"
-    f = file.file
-    current = f.tell()
-    f.seek(0, 2)
-    size = f.tell()
-    f.seek(current)
-    if size > settings.max_upload_mb * 1024 * 1024:
+    limit = settings.max_upload_mb * 1024 * 1024
+    content = file.file.read(limit + 1)
+    size = len(content)
+    if size > limit:
         raise HTTPException(413, f"file exceeds {settings.max_upload_mb} MB")
-    f.seek(0)
-    storage.upload_fileobj(f, key, file.content_type)
+    if not content:
+        raise HTTPException(422, "Choose a non-empty image file")
+    declared = (file.content_type or "").lower().split(";", 1)[0].strip()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as probe:
+                detected_format = (probe.format or "").upper()
+                width, height = probe.size
+                if width <= 0 or height <= 0 or width * height > 40_000_000:
+                    raise ValueError("image dimensions exceed the 40 megapixel limit")
+                if detected_format not in {"PNG", "JPEG", "WEBP", "GIF"}:
+                    raise ValueError("unsupported image format")
+                probe.verify()
+            with Image.open(io.BytesIO(content)) as decoded:
+                decoded.load()
+                width, height = decoded.size
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning) as exc:
+        raise HTTPException(422, "The uploaded file is not a valid, supported image") from exc
+    mime_type = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}[detected_format]
+    if declared and declared not in {"application/octet-stream", mime_type}:
+        raise HTTPException(422, "Image content does not match the declared file type")
+    storage.upload_fileobj(io.BytesIO(content), key, mime_type)
+    created_at = db.utcnow()
+    db.save_input_asset({"asset_id": upload_id, "storage_key": key, "mime_type": mime_type,
+        "size_bytes": size, "width": width, "height": height, "created_at": created_at})
     return {
         "asset_id": upload_id,
         "upload_id": upload_id,
         "bucket": settings.r2_bucket,
         "key": key,
         "url": storage.presign_get(key),
+        "mime_type": mime_type,
+        "size_bytes": size,
+        "width": width,
+        "height": height,
         "s3_uri": f"s3://{settings.r2_bucket}/{key}",
     }
+
+
+@app.get("/api/jobs/{local_id}/assets/{asset_id}/download")
+def download_asset(local_id: str, asset_id: str):
+    """Issue a short-lived private download URL only for this Job's verified Asset."""
+    item = db.get_job(local_id)
+    if not item or item.get("hidden"):
+        raise HTTPException(404, "job not found")
+    asset = next((a for a in item.get("assets", []) if a.get("asset_id") == asset_id and a.get("status") == "available"), None)
+    if not asset:
+        raise HTTPException(404, "verified asset not found")
+    name = asset["storage_key"].rsplit("/", 1)[-1]
+    return RedirectResponse(storage.presign_get(asset["storage_key"], download_name=name), status_code=307)
 
 
 def submit_job(workflow_id, variables, priority=None, *, client_request_id=None, workflow_version=None,
@@ -398,14 +442,18 @@ def public_job(item: dict):
     heartbeat_at = data.get("last_heartbeat")
     data["communication"] = {"source": "controller", "worker_last_heartbeat_at": datetime.fromtimestamp(heartbeat_at, timezone.utc).isoformat() if heartbeat_at else None,
                              "overdue": data.get("state") == "stalled"}
-    available = [a for a in data.get("assets", []) if a["status"] == "available"]
-    unavailable = len(data.get("assets", [])) - len(available)
+    scoped_assets = data.get("assets", [])
+    if data.get("active_attempt_id"):
+        scoped_assets = [a for a in scoped_assets if a.get("attempt_id") == data["active_attempt_id"]]
+    available = [a for a in scoped_assets if a["status"] == "available"]
+    unavailable = len(scoped_assets) - len(available)
     expected = ((data.get("snapshot") or {}).get("output_spec") or {}).get("count")
     data["output_summary"] = {"available": len(available), "unavailable": unavailable, "expected_count": expected,
         "partial_success": bool(available and (unavailable or isinstance(expected, int) and len(available) < expected)), "verification": "storage_head" if data.get("snapshot") else "legacy_unverified"}
     for asset in data.get("assets", []):
         asset["preview"] = None
         asset["url"] = storage.presign_get(asset["storage_key"]) if asset["status"] == "available" else None
+        asset["s3_uri"] = f"s3://{settings.r2_bucket}/{asset['storage_key']}" if asset["status"] == "available" else None
     # Do not advertise an expired signed URL as a valid editable input.
     data["output"] = storage.sign_s3_values(data.get("output"))
     return data

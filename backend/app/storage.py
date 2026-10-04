@@ -34,10 +34,15 @@ def upload_fileobj(fileobj, key: str, content_type: str | None = None):
     return key
 
 
-def presign_get(key: str, ttl: int | None = None):
+def presign_get(key: str, ttl: int | None = None, *, download_name: str | None = None):
+    params = {"Bucket": settings.r2_bucket, "Key": key}
+    if download_name:
+        from urllib.parse import quote
+        safe_name = re.sub(r"[\r\n\"\\]", "_", download_name)[:180] or "download"
+        params["ResponseContentDisposition"] = f"attachment; filename=\"download\"; filename*=UTF-8''{quote(safe_name)}"
     return client().generate_presigned_url(
         "get_object",
-        Params={"Bucket": settings.r2_bucket, "Key": key},
+        Params=params,
         ExpiresIn=ttl or settings.r2_presign_ttl_seconds,
     )
 

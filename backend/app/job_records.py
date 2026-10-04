@@ -52,6 +52,12 @@ def migrate(c):
         created_at TEXT NOT NULL,
         UNIQUE(job_id,storage_key)
       );
+      CREATE INDEX IF NOT EXISTS idx_job_assets_storage_key ON job_assets(storage_key,status);
+      CREATE TABLE IF NOT EXISTS input_assets (
+        asset_id TEXT PRIMARY KEY, storage_key TEXT NOT NULL UNIQUE,
+        mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+        width INTEGER NOT NULL, height INTEGER NOT NULL, created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS job_events (
         job_id TEXT NOT NULL, version INTEGER NOT NULL, attempt_id TEXT,
         previous_state TEXT, state TEXT NOT NULL, reason TEXT, observed_at TEXT NOT NULL,
@@ -174,6 +180,12 @@ def save_assets(c, assets):
     for asset in assets:
         fields = list(asset)
         c.execute("INSERT INTO job_assets(" + ",".join(fields) + ") VALUES (" + ",".join("?" for _ in fields) + ") ON CONFLICT(job_id,storage_key) DO NOTHING", list(asset.values()))
+
+
+def asset_for_storage_key(c, storage_key):
+    row = c.execute("SELECT * FROM job_assets WHERE storage_key=? AND status='available' ORDER BY created_at DESC LIMIT 1",
+                    (storage_key,)).fetchone()
+    return dict(row) if row else None
 
 
 def end_attempt(c, attempt_id, state, now, reason=None, result_hash=None):
