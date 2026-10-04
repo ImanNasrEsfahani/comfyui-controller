@@ -29,6 +29,45 @@ button.danger:hover { background: #402020; }
 .output-thumbnails a:hover img { border-color: #a9c5ff; }
 @media (max-width: 650px) { .instance-heading { flex-direction: column; } .instance-item { align-items: flex-start; flex-direction: column; } .output-thumbnails img { width: 80px; height: 80px; } }
 
+/* Axis 3: capability-driven inputs, workflow transparency, and local presets. */
+.workflow-capability-header, .workflow-summary, .advanced-settings, .preset-panel {
+  margin: 12px 0; padding: 13px; border: 1px solid #293747; border-radius: 12px; background: #0d121b;
+}
+.workflow-capability-header { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; align-items: center; }
+.workflow-capability-header p { grid-column: 1 / -1; margin: 3px 0 0; }
+.workflow-capability-header .pill { white-space: nowrap; }
+.workflow-summary summary, .advanced-settings summary, .preset-panel summary { cursor: pointer; color: #cbd5e1; font-size: 13px; }
+.workflow-summary p { margin: 9px 0; overflow-wrap: anywhere; font-size: 13px; }
+.workflow-summary details { margin-top: 10px; padding-top: 10px; border-top: 1px solid #202938; }
+.workflow-summary ol, .workflow-summary ul { padding-left: 22px; color: #b6c2d3; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.capability-editor textarea { margin-top: 12px; }
+.advanced-settings, .preset-panel { display: grid; gap: 12px; }
+.advanced-settings > summary, .preset-panel > summary { display: list-item; }
+.advanced-settings .field-block { padding: 8px 0; border-top: 1px solid #202938; }
+.advanced-settings .field-block:first-of-type { border-top: 0; }
+.advanced-settings > button { justify-self: start; }
+.range-control { width: 100%; margin: 8px 0 2px; accent-color: #82b5ff; }
+.reference-order-controls { display: inline-flex; gap: 8px; align-items: center; }
+.preset-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: end; }
+.preset-create > label:not(.checkbox-label) { grid-column: 1 / -1; }
+.preset-create input:not([type="checkbox"]) { min-width: 0; }
+.preset-create button { margin: 0; white-space: nowrap; }
+.preset-list { display: grid; gap: 9px; }
+.preset-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px; border: 1px solid #202938; border-radius: 10px; }
+.preset-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.preset-row .hint { margin: 4px 0 0; }
+.preset-row .pill { margin-left: 8px; font-size: 10px; }
+.preset-row .button-row { justify-content: flex-end; margin-top: 0; }
+.preset-row .button-row button { margin: 0; padding: 7px 9px; font-size: 11px; }
+@media (max-width: 650px) {
+  .workflow-capability-header { grid-template-columns: 1fr; }
+  .workflow-capability-header p { grid-column: auto; }
+  .preset-row { align-items: flex-start; flex-direction: column; }
+  .preset-row .button-row { justify-content: flex-start; }
+  .preset-create { grid-template-columns: 1fr; }
+  .preset-create > label:not(.checkbox-label) { grid-column: auto; }
+}
+
 /* One-GPU editing session controls. */
 .warm-controls { display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 14px; border: 1px solid #3b485d; border-radius: 12px;

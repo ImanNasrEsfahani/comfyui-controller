@@ -57,6 +57,11 @@ def init_db():
         )""")
 
         c.execute("BEGIN IMMEDIATE")
+        workflow_cols = {row["name"] for row in c.execute("PRAGMA table_info(workflows)").fetchall()}
+        if "capabilities_json" not in workflow_cols:
+            # Additive: pre-catalog workflows remain available and get their
+            # capability view inferred from the saved API-format graph.
+            c.execute("ALTER TABLE workflows ADD COLUMN capabilities_json TEXT")
         cols = {row["name"] for row in c.execute("PRAGMA table_info(jobs)").fetchall()}
 
         if "priority" not in cols:
@@ -115,28 +120,30 @@ def get_workflow(workflow_id):
         d = dict(row)
         d["api_prompt"] = json.loads(d["api_prompt"])
         d["ui_workflow"] = json.loads(d["ui_workflow"]) if d["ui_workflow"] else None
+        d["capability_spec"] = json.loads(d["capabilities_json"]) if d.get("capabilities_json") else None
         return d
 
 
-def save_workflow(workflow_id, name, api_prompt, ui_workflow=None):
+def save_workflow(workflow_id, name, api_prompt, ui_workflow=None, capability_spec=None):
     now = utcnow()
     api_json = json.dumps(api_prompt, separators=(",", ":"))
     ui_json = json.dumps(ui_workflow, separators=(",", ":")) if ui_workflow is not None else None
+    capabilities_json = json.dumps(capability_spec, separators=(",", ":")) if capability_spec is not None else None
     with connect() as c:
         exists = c.execute("SELECT 1 FROM workflows WHERE id=?", (workflow_id,)).fetchone()
         if exists:
             c.execute(
                 """UPDATE workflows
-                   SET name=?, api_prompt=?, ui_workflow=?, updated_at=?
+                   SET name=?, api_prompt=?, ui_workflow=?, capabilities_json=?, updated_at=?
                    WHERE id=?""",
-                (name, api_json, ui_json, now, workflow_id),
+                (name, api_json, ui_json, capabilities_json, now, workflow_id),
             )
         else:
             c.execute(
                 """INSERT INTO workflows
-                   (id,name,api_prompt,ui_workflow,created_at,updated_at)
-                   VALUES (?,?,?,?,?,?)""",
-                (workflow_id, name, api_json, ui_json, now, now),
+                   (id,name,api_prompt,ui_workflow,capabilities_json,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (workflow_id, name, api_json, ui_json, capabilities_json, now, now),
             )
     return get_workflow(workflow_id)
 

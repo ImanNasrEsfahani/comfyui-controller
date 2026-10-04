@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import hmac
 import os
 import re
+import secrets
 import httpx
 
 from .config import settings
@@ -56,6 +57,11 @@ def stale_minutes():
         return max(10, min(7 * 24 * 60, int(os.getenv("JOB_STALE_MINUTES", "180"))))
     except ValueError:
         return 180
+
+
+def random_seed(minimum: int, maximum: int) -> int:
+    """Choose one inclusive seed without changing the global PRNG module."""
+    return minimum + secrets.randbelow(maximum - minimum + 1)
 
 
 @app.on_event("startup")
@@ -108,6 +114,7 @@ class WorkflowIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     api_prompt: dict[str, Any]
     ui_workflow: dict[str, Any] | None = None
+    capability_spec: dict[str, Any] | None = None
 
 
 class RetryIn(BaseModel):
@@ -139,6 +146,17 @@ def workflows():
     return db.list_workflows()
 
 
+@app.get("/api/catalog")
+def workflow_catalog():
+    items = []
+    for row in db.list_workflows():
+        wf = db.get_workflow(row["id"])
+        if not wf:
+            continue
+        items.append({"id": wf["id"], "name": wf["name"], **contracts.workflow_contract(wf)})
+    return {"schema_version": 1, "workflows": items}
+
+
 @app.get("/api/workflows/{workflow_id}")
 def workflow(workflow_id: str):
     item = db.get_workflow(workflow_id)
@@ -154,7 +172,14 @@ def put_workflow(workflow_id: str, body: WorkflowIn, x_internal_token: str | Non
         raise HTTPException(400, "path id and body id must match")
     if "nodes" in body.api_prompt or "last_node_id" in body.api_prompt:
         raise HTTPException(400, "api_prompt looks like ComfyUI UI workflow format. Export API Format first.")
-    return db.save_workflow(body.id, body.name, body.api_prompt, body.ui_workflow)
+    try:
+        contracts.ensure_no_credentials(body.capability_spec, "capability_spec")
+        capability_spec = contracts.validate_capability_spec(body.api_prompt, body.capability_spec)
+    except Exception as exc:
+        if hasattr(exc, "code") and hasattr(exc, "path"):
+            raise ContractError(exc.code, str(exc), exc.path)
+        raise
+    return db.save_workflow(body.id, body.name, body.api_prompt, body.ui_workflow, capability_spec)
 
 
 @app.delete("/api/workflows/{workflow_id}", status_code=204)
@@ -188,13 +213,16 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
     }
 
 
-def submit_job(workflow_id, variables, priority=None, *, client_request_id=None, workflow_version=None, source_job_id=None):
+def submit_job(workflow_id, variables, priority=None, *, client_request_id=None, workflow_version=None,
+               capability_version=None, seed_mode=None, reference_order=None, source_job_id=None):
     selected_priority = (priority or settings.salad_priority).strip().lower()
     if selected_priority != settings.salad_priority:
         raise HTTPException(400, f"Only priority {settings.salad_priority!r} is available")
     try:
         request_hash = contracts.digest({"workflow_id": workflow_id, "workflow_version": workflow_version,
-            "variables": variables, "priority": selected_priority, "source_job_id": source_job_id})
+            "capability_version": capability_version, "seed_mode": seed_mode,
+            "reference_order": reference_order, "variables": variables,
+            "priority": selected_priority, "source_job_id": source_job_id})
     except (ValueError, TypeError):
         raise ContractError("invalid_variables", "Variables must contain valid finite JSON values", "variables")
     if client_request_id:
@@ -208,7 +236,26 @@ def submit_job(workflow_id, variables, priority=None, *, client_request_id=None,
         raise HTTPException(400, "variables must be an object")
     if workflow_version and workflow_version != contracts.digest(wf["api_prompt"]):
         raise ContractError("workflow_changed", "The saved workflow changed; reload it before submitting", "workflow_version", 409)
-    variables = contracts.validate_variables(wf["api_prompt"], variables)
+    wf_contract = contracts.workflow_contract(wf)
+    if capability_version and capability_version != wf_contract["capability_version"]:
+        raise ContractError("capability_changed", "Workflow capabilities changed; reload the form before submitting", "capability_version", 409)
+    capabilities = wf_contract["capabilities"]
+    variables = contracts.validate_variables(wf["api_prompt"], variables, wf.get("capability_spec"))
+    seed_variable = capabilities.get("seed_variable")
+    if seed_mode not in (None, "fixed", "random"):
+        raise ContractError("invalid_seed_mode", "Seed mode must be fixed or random", "seed_mode")
+    if seed_mode is not None and not seed_variable:
+        raise ContractError("unsupported_seed_mode", "This Workflow does not bind a seed to a sampler", "seed_mode")
+    effective_seed_mode = seed_mode or "fixed"
+    if effective_seed_mode == "random":
+        seed_limits = capabilities.get("seed_range") or {"minimum": 0, "maximum": contracts.JS_SAFE_INTEGER}
+        minimum = max(0, int(seed_limits.get("minimum", 0)))
+        maximum = min(contracts.JS_SAFE_INTEGER, int(seed_limits.get("maximum", contracts.JS_SAFE_INTEGER)))
+        if maximum < minimum:
+            raise ContractError("invalid_seed_range", "Workflow seed range is invalid", "seed_mode")
+        variables[seed_variable] = random_seed(minimum, maximum)
+        variables = contracts.validate_variables(wf["api_prompt"], variables, wf.get("capability_spec"))
+    variables = contracts.reorder_reference_values(variables, capabilities, reference_order)
     if source_job_id:
         source = db.get_job(source_job_id)
         if not source or source.get("hidden"):
@@ -223,8 +270,10 @@ def submit_job(workflow_id, variables, priority=None, *, client_request_id=None,
             return recovered if recovered else value
         return value
     variables = durable(variables)
-    variables = contracts.validate_image_references(variables)
-    snapshot = contracts.effective_snapshot(wf, variables, selected_priority, client_request_id=client_request_id)
+    optional_images = {item["variable_key"] for item in capabilities.get("references", []) if not item.get("required", True)}
+    variables = contracts.validate_image_references(variables, optional_images)
+    snapshot = contracts.effective_snapshot(wf, variables, selected_priority,
+        client_request_id=client_request_id, seed_mode=effective_seed_mode, reference_order=reference_order)
     contracts.ensure_no_credentials(snapshot["prompt"], "workflow")
     try:
         # Store durable s3:// references; renew signed URLs for EVERY attempt.
@@ -306,7 +355,9 @@ def apply_provider_result(item, state, output):
 def create_job(body: JobIn, x_internal_token: str | None = Header(default=None)):
     check_internal_token(x_internal_token)
     return public_job(submit_job(body.workflow_id, body.variables, body.priority,
-        client_request_id=body.client_request_id, workflow_version=body.workflow_version, source_job_id=body.source_job_id))
+        client_request_id=body.client_request_id, workflow_version=body.workflow_version,
+        capability_version=body.capability_version, seed_mode=body.seed_mode,
+        reference_order=body.reference_order, source_job_id=body.source_job_id))
 
 
 @app.get("/api/job-requests/{client_request_id}")
@@ -339,7 +390,7 @@ def public_job(item: dict):
     data.pop("lease_token_hash", None)
     data.pop("worker_id", None)
     data.pop("request_hash", None)
-    data["contract_version"] = 1 if data.get("snapshot") else 0
+    data["contract_version"] = (data.get("snapshot") or {}).get("contract_version", 1) if data.get("snapshot") else 0
     data["last_updated_at"] = data["updated_at"]
     heartbeat_at = data.get("last_heartbeat")
     data["communication"] = {"source": "controller", "worker_last_heartbeat_at": datetime.fromtimestamp(heartbeat_at, timezone.utc).isoformat() if heartbeat_at else None,
@@ -395,7 +446,9 @@ def job_draft(local_id: str):
     if not wf:
         raise HTTPException(409, "Original workflow was removed")
     if item.get("variables") is not None:
-        return {"workflow_id": wf["id"], "variables": item["variables"], "legacy": False}
+        snapshot = item.get("snapshot") or {}
+        return {"workflow_id": wf["id"], "variables": item["variables"],
+                "seed_mode": snapshot.get("seed_mode", "fixed"), "legacy": False}
     rendered = (item.get("request") or {}).get("prompt")
     extracted = job_lifecycle.legacy_draft(wf.get("api_prompt"), rendered)
     return {

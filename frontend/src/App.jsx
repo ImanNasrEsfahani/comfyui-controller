@@ -1,6 +1,6 @@
 import "./enhancements.css";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { mergeJob, mergeJobList, isStale, submissionBody, requestId, validateVariables } from "./contracts.js";
+import { mergeJob, mergeJobList, isStale, submissionBody, requestId, validateVariables, containsCredentialLikeData } from "./contracts.js";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
 let sessionToken = ""; // Deliberately memory-only: never store an admin token in localStorage.
@@ -98,13 +98,29 @@ function defaultValueFor(key) {
   return "";
 }
 
-function normalizeVariables(keys, previous = {}) {
+function normalizeVariables(keys, previous = {}, capabilities = null) {
   const next = {};
+  const declared = new Map((capabilities?.fields || []).map(field => [field.variable_key, field]));
   keys.forEach(key => {
     if (Object.prototype.hasOwnProperty.call(previous, key)) {
       next[key] = previous[key];
     } else {
-      next[key] = defaultValueFor(key);
+      const definition = declared.get(key);
+      next[key] = definition?.default !== undefined && definition?.default !== null
+        ? definition.default
+        : defaultValueFor(key);
+      if (definition?.kind === "select" && definition?.options?.length) {
+        next[key] = definition.default ?? definition.options[0];
+      }
+      if (["integer", "number"].includes(definition?.kind) && typeof next[key] === "number") {
+        if (definition.minimum != null) next[key] = Math.max(definition.minimum, next[key]);
+        if (definition.maximum != null) next[key] = Math.min(definition.maximum, next[key]);
+        if (Number(definition.step) > 0) {
+          const base = definition.minimum ?? 0;
+          next[key] = base + Math.round((next[key] - base) / definition.step) * definition.step;
+        }
+        if (definition.kind === "integer") next[key] = Math.round(next[key]);
+      }
     }
   });
   return next;
@@ -133,31 +149,56 @@ function friendlyLabel(key) {
     .replace(/\b\w/g, m => m.toUpperCase());
 }
 
-function variableKind(key, value) {
+function variableKind(key, value, definition = null) {
+  if (definition?.kind === "prompt") return "textarea";
+  if (definition?.kind) return definition.kind === "integer" || definition.kind === "number" ? "number" : definition.kind;
   if (/^input\.image_\d+$/.test(key)) return "image";
   if (key.startsWith("prompt.")) return "textarea";
   if (typeof value === "boolean" || /enabled$/i.test(key)) return "boolean";
   if (
     typeof value === "number" ||
-    /(seed|steps|cfg|denoise|width|height|strength|count)$/i.test(key)
+    /(seed|steps|cfg|denoise|width|height|strength(?:_(?:model|clip))?|(?:model|clip)_strength|count)$/i.test(key)
   ) return "number";
   return "text";
 }
 
-function numberStep(key) {
+function numberStep(key, definition = null) {
+  if (definition?.step != null) return String(definition.step);
   if (/seed|steps|width|height|count/i.test(key)) return "1";
   if (/strength|cfg|denoise/i.test(key)) return "0.01";
   return "any";
 }
 
-function loadLocalVariables(workflowId, keys) {
-  if (!workflowId) return normalizeVariables(keys);
+const ASPECT_RATIOS = [
+  { label: "1:1", width: 1, height: 1 },
+  { label: "4:3", width: 4, height: 3 },
+  { label: "3:2", width: 3, height: 2 },
+  { label: "16:9", width: 16, height: 9 },
+  { label: "9:16", width: 9, height: 16 }
+];
+
+function fitDimension(target, definition) {
+  const step = Number(definition?.step) > 0 ? Number(definition.step) : 1;
+  const minimum = Number.isFinite(definition?.minimum) ? definition.minimum : 1;
+  const maximum = Number.isFinite(definition?.maximum) ? definition.maximum : Number.MAX_SAFE_INTEGER;
+  const clamped = Math.min(maximum, Math.max(minimum, target));
+  const value = minimum + Math.round((clamped - minimum) / step) * step;
+  return Math.min(maximum, Math.max(minimum, definition?.kind === "integer" ? Math.round(value) : value));
+}
+
+function loadLocalVariables(workflowId, keys, capabilities = null, capabilityVersion = null) {
+  if (!workflowId) return { variables: normalizeVariables(keys, {}, capabilities), incompatible: false };
 
   try {
     const raw = localStorage.getItem(`comfyui-controller:variables:${workflowId}`);
-    if (!raw) return normalizeVariables(keys);
+    if (!raw) return { variables: normalizeVariables(keys, {}, capabilities), incompatible: false };
 
-    const saved = JSON.parse(raw);
+    const stored = JSON.parse(raw);
+    const wrapped = stored && typeof stored === "object" && stored.variables && typeof stored.variables === "object";
+    const saved = wrapped ? stored.variables : stored;
+    if (wrapped && capabilityVersion && stored.capability_version && stored.capability_version !== capabilityVersion) {
+      return { variables: normalizeVariables(keys, {}, capabilities), incompatible: true };
+    }
     const sanitized = { ...saved };
 
     // Signed upload URLs expire. Never restore image URLs from browser storage.
@@ -165,13 +206,13 @@ function loadLocalVariables(workflowId, keys) {
       sanitized[k] = "";
     });
 
-    return normalizeVariables(keys, sanitized);
+    return { variables: normalizeVariables(keys, sanitized, capabilities), incompatible: false };
   } catch {
-    return normalizeVariables(keys);
+    return { variables: normalizeVariables(keys, {}, capabilities), incompatible: false };
   }
 }
 
-function saveLocalVariables(workflowId, variables) {
+function saveLocalVariables(workflowId, variables, capabilityVersion = null) {
   if (!workflowId) return;
 
   try {
@@ -179,13 +220,26 @@ function saveLocalVariables(workflowId, variables) {
     Object.keys(safe).forEach(key => {
       if (/^input\.image_\d+$/.test(key)) safe[key] = "";
     });
-    localStorage.setItem(
-      `comfyui-controller:variables:${workflowId}`,
-      JSON.stringify(safe)
-    );
+    localStorage.setItem(`comfyui-controller:variables:${workflowId}`,
+      JSON.stringify({ schema_version: 2, capability_version: capabilityVersion, variables: safe }));
   } catch {
     // Browser storage is optional; ignore quota/privacy-mode failures.
   }
+}
+
+function loadSeedMode(workflowId, capabilityVersion) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`comfyui-controller:seed-mode:${workflowId}`) || "null");
+    if (saved?.capability_version === capabilityVersion && ["fixed", "random"].includes(saved.mode)) return saved.mode;
+  } catch { /* Browser storage is optional. */ }
+  return "fixed";
+}
+
+function loadPresets(workflowId) {
+  try {
+    const value = JSON.parse(localStorage.getItem(`comfyui-controller:presets:${workflowId}`) || "[]");
+    return Array.isArray(value) ? value.filter(item => item && typeof item.id === "string" && typeof item.name === "string") : [];
+  } catch { return []; }
 }
 
 export default function App() {
@@ -197,6 +251,7 @@ export default function App() {
   const liveVariables = useRef({});
   const submitting = useRef(false);
   const pendingSubmission = useRef(null);
+  const defaultPresetApplied = useRef("");
   const sourceJob = useRef(null);
   const workflowDefaults = useRef({ id: "", variables: {} });
   const fieldRefs = useRef({});
@@ -212,6 +267,13 @@ export default function App() {
   const [clock, setClock] = useState(Date.now());
   const [currentJobId, setCurrentJobId] = useState(null);
   const [workflows, setWorkflows] = useState([]);
+  const [selectedCapabilities, setSelectedCapabilities] = useState(null);
+  const [capabilitySpecDraft, setCapabilitySpecDraft] = useState("");
+  const [seedMode, setSeedMode] = useState("fixed");
+  const [presets, setPresets] = useState([]);
+  const [presetName, setPresetName] = useState("");
+  const [includePromptsInPreset, setIncludePromptsInPreset] = useState(true);
+  const [referenceOrder, setReferenceOrder] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowName, setWorkflowName] = useState("");
@@ -260,13 +322,14 @@ export default function App() {
   );
 
   const missingImages = useMemo(
-    () => imageKeys.filter(key => !String(variables[key] || "").trim()),
-    [imageKeys, variables]
+    () => imageKeys.filter(key => selectedCapabilities?.references?.find(r => r.variable_key === key)?.required !== false &&
+      !String(variables[key] || "").trim()),
+    [imageKeys, variables, selectedCapabilities]
   );
 
   const currentDefaults = workflowDefaults.current.id === selected
     ? workflowDefaults.current.variables
-    : normalizeVariables(placeholderKeys);
+    : normalizeVariables(placeholderKeys, {}, selectedCapabilities);
   const variablesJsonDirty = variablesDraft !== JSON.stringify(variables, null, 2);
   const formChanged = placeholderKeys.some(key =>
     JSON.stringify(variables[key]) !== JSON.stringify(currentDefaults[key])
@@ -276,6 +339,26 @@ export default function App() {
     () => workflows.find(w => w.id === selected)?.name || selected,
     [workflows, selected]
   );
+  const baseReferenceSlots = selectedCapabilities?.references || [];
+  const fieldByKey = new Map((selectedCapabilities?.fields || []).map(field => [field.variable_key, field]));
+  const widthKey = placeholderKeys.find(key => /(?:^|\.)(?:output\.)?width$/i.test(key));
+  const heightKey = placeholderKeys.find(key => /(?:^|\.)(?:output\.)?height$/i.test(key));
+  const widthDefinition = fieldByKey.get(widthKey);
+  const heightDefinition = fieldByKey.get(heightKey);
+  const canChooseAspectRatio = Boolean(widthKey && heightKey &&
+    ["integer", "number"].includes(variableKind(widthKey, variables[widthKey], widthDefinition)) &&
+    ["integer", "number"].includes(variableKind(heightKey, variables[heightKey], heightDefinition)));
+  const currentAspectRatio = canChooseAspectRatio && Number(variables[widthKey]) > 0 && Number(variables[heightKey]) > 0
+    ? ASPECT_RATIOS.find(ratio => Math.abs(Number(variables[widthKey]) / Number(variables[heightKey]) - ratio.width / ratio.height) < 0.0001)?.label || "custom"
+    : "custom";
+  const referenceByKey = new Map(baseReferenceSlots.map(slot => [slot.variable_key, slot]));
+  const canReorderReferences = baseReferenceSlots.length > 1 && baseReferenceSlots.length === imageKeys.length &&
+    baseReferenceSlots.every(slot => slot.reorderable && slot.role === "reference");
+  const renderedFieldKeys = canReorderReferences && referenceOrder.length === baseReferenceSlots.length
+    ? [...referenceOrder, ...placeholderKeys.filter(key => !baseReferenceSlots.some(slot => slot.variable_key === key))]
+    : placeholderKeys;
+  const advancedFieldKeys = renderedFieldKeys.filter(key => Boolean(fieldByKey.get(key)?.advanced));
+  const regularFieldKeys = renderedFieldKeys.filter(key => !fieldByKey.get(key)?.advanced);
 
   useEffect(() => {
     fetch("/health")
@@ -319,16 +402,51 @@ export default function App() {
 
   useEffect(() => {
     setVariables(prev => {
-      const next = normalizeVariables(placeholderKeys, prev);
+      const next = normalizeVariables(placeholderKeys, prev, selectedCapabilities);
       setVariablesDraft(JSON.stringify(next, null, 2));
       return next;
     });
-  }, [placeholderKeys.join("|")]);
+  }, [placeholderKeys.join("|"), selectedCapabilities?.capability_version]);
 
   useEffect(() => {
-    if (selected) saveLocalVariables(selected, variables);
+    if (selected && loadedWorkflow.current?.id === selected) {
+      saveLocalVariables(selected, variables, selectedCapabilities?.capability_version);
+    }
     setVariablesDraft(JSON.stringify(variables, null, 2));
-  }, [variables, selected]);
+  }, [variables, selected, selectedCapabilities?.capability_version]);
+
+  useEffect(() => {
+    if (!selected || !selectedCapabilities?.seed_variable) return;
+    try {
+      localStorage.setItem(`comfyui-controller:seed-mode:${selected}`,
+        JSON.stringify({ capability_version: selectedCapabilities.capability_version, mode: seedMode }));
+    } catch { /* Browser storage is optional. */ }
+  }, [selected, selectedCapabilities?.capability_version, seedMode]);
+
+  useEffect(() => {
+    if (!selected || loadedWorkflow.current?.id !== selected || !selectedCapabilities?.capability_version || !presets.length) return;
+    const defaultPreset = presets.find(preset => preset.is_default);
+    if (!defaultPreset) return;
+    const key = `${selected}:${selectedCapabilities.capability_version}:${defaultPreset.id}`;
+    if (defaultPresetApplied.current === key) return;
+    defaultPresetApplied.current = key;
+    if (defaultPreset.capability_version !== selectedCapabilities.capability_version ||
+        defaultPreset.workflow_version !== loadedWorkflow.current.workflow_version) {
+      setMessage(`Default preset “${defaultPreset.name}” needs review because its Workflow version changed.`);
+      return;
+    }
+    const next = normalizeVariables(loadedWorkflow.current.variable_keys, defaultPreset.variables || {}, selectedCapabilities);
+    liveVariables.current = next;
+    setVariables(next);
+    setSeedMode(defaultPreset.seed_mode || "fixed");
+    if (canReorderReferences && Array.isArray(defaultPreset.reference_order) &&
+        defaultPreset.reference_order.length === baseReferenceSlots.length &&
+        new Set(defaultPreset.reference_order).size === baseReferenceSlots.length &&
+        baseReferenceSlots.every(slot => defaultPreset.reference_order.includes(slot.variable_key))) {
+      setReferenceOrder(defaultPreset.reference_order);
+    }
+    setMessage(`Default preset “${defaultPreset.name}” was applied. Reference images were left empty.`);
+  }, [selected, selectedCapabilities?.capability_version, presets, canReorderReferences]);
 
   async function refreshInstances() {
     if (instancesPolling.current) return;
@@ -556,6 +674,7 @@ export default function App() {
     try {
       const draft = await api(`/jobs/${encodeURIComponent(job.id)}/draft`);
       await loadWorkflow(draft.workflow_id, draft.variables);
+      setSeedMode(draft.seed_mode || "fixed");
       sourceJob.current = job.id;
       setMessage(draft.warning || "Job inputs restored. Edit the prompt and run when ready.");
       document.getElementById("inputs-run")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -591,7 +710,8 @@ export default function App() {
   }
 
   async function refreshWorkflows() {
-    setWorkflows(await api("/workflows"));
+    const data = await api("/catalog");
+    setWorkflows(Array.isArray(data?.workflows) ? data.workflows : []);
   }
 
   async function resetGpuHold() {
@@ -660,7 +780,8 @@ export default function App() {
         latest[key] = current[key];
         continue;
       }
-      const kind = variableKind(key, current[key]);
+      const definition = loadedWorkflow.current?.capabilities?.fields?.find(field => field.variable_key === key);
+      const kind = variableKind(key, current[key], definition);
       if (kind === "boolean") latest[key] = Boolean(element.checked);
       else if (kind === "number") {
         if (element.value === "") latest[key] = "";
@@ -679,7 +800,7 @@ export default function App() {
     setVariables(next);
     setFieldErrors(previous => {
       if (!Object.prototype.hasOwnProperty.call(previous, key)) return previous;
-      const error = validateVariables([key], next)[key];
+      const error = validateVariables([key], next, loadedWorkflow.current?.capabilities)[key];
       const updated = { ...previous };
       if (error) updated[key] = error;
       else delete updated[key];
@@ -688,7 +809,123 @@ export default function App() {
   }
 
   function randomizeSeed(key) {
-    updateVariable(key, Math.floor(Math.random() * 2147483647));
+    const minimum = selectedCapabilities?.seed_range?.minimum ?? 0;
+    const maximum = selectedCapabilities?.seed_range?.maximum ?? 2147483647;
+    updateVariable(key, Math.floor(Math.random() * (maximum - minimum + 1)) + minimum);
+  }
+
+  function setAspectRatio(label) {
+    const ratio = ASPECT_RATIOS.find(item => item.label === label);
+    if (!ratio || !canChooseAspectRatio) return;
+    const currentWidth = Number(variables[widthKey]) || 1024;
+    const currentHeight = Number(variables[heightKey]) || 1024;
+    const targetRatio = ratio.width / ratio.height;
+    const area = currentWidth * currentHeight;
+    const width = fitDimension(Math.sqrt(area * targetRatio), widthDefinition);
+    const height = fitDimension(Math.sqrt(area / targetRatio), heightDefinition);
+    updateVariable(widthKey, width);
+    updateVariable(heightKey, height);
+  }
+
+  function persistPresets(next) {
+    setPresets(next);
+    try { localStorage.setItem(`comfyui-controller:presets:${selected}`, JSON.stringify(next)); }
+    catch { setMessage("Browser storage is unavailable; the preset was not saved."); }
+  }
+
+  function savePreset() {
+    const name = presetName.trim();
+    if (!name) { setMessage("Enter a name for this preset."); return; }
+    if (!loadedWorkflow.current || loadedWorkflow.current.id !== selected) { setMessage("Load a saved Workflow before creating a preset."); return; }
+    const keys = loadedWorkflow.current.variable_keys || [];
+    const latest = readLatestVariables(keys);
+    const errors = validateVariables(keys, latest, loadedWorkflow.current.capabilities);
+    const invalid = Object.keys(errors).filter(key => !/^input\.image_\d+$/.test(key));
+    if (invalid.length) { setMessage("Correct invalid settings before saving the preset."); return; }
+    const savedVariables = {};
+    for (const key of keys) {
+      if (/^input\.image_\d+$/.test(key) || (!includePromptsInPreset && key.startsWith("prompt."))) continue;
+      savedVariables[key] = latest[key];
+    }
+    if (containsCredentialLikeData(savedVariables)) {
+      setMessage("This preset contains credential-like text. Remove it before saving the preset.");
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const preset = {
+      id: requestId(), name, schema_version: 1, workflow_id: selected,
+      workflow_version: loadedWorkflow.current.workflow_version,
+      capability_version: loadedWorkflow.current.capability_version,
+      seed_mode: seedMode, variables: savedVariables, includes_prompts: includePromptsInPreset,
+      reference_order: canReorderReferences ? [...referenceOrder] : undefined,
+      includes_references: false, created_at: createdAt, updated_at: createdAt, is_default: false
+    };
+    persistPresets([preset, ...presets.filter(item => item.name.toLowerCase() !== name.toLowerCase())].slice(0, 50));
+    setPresetName("");
+    setMessage(`Preset “${name}” saved on this browser. Reference images were not saved.`);
+  }
+
+  function applyPreset(preset) {
+    if (!preset || !loadedWorkflow.current) return;
+    if (preset.workflow_id !== selected || preset.workflow_version !== loadedWorkflow.current.workflow_version ||
+        preset.capability_version !== loadedWorkflow.current.capability_version) {
+      setMessage(`Preset “${preset.name}” is incompatible with the current Workflow version and was not applied.`);
+      return;
+    }
+    const next = normalizeVariables(loadedWorkflow.current.variable_keys, {
+      ...liveVariables.current,
+      ...(preset.variables || {}),
+      ...Object.fromEntries((selectedCapabilities?.references || []).map(ref => [ref.variable_key, liveVariables.current[ref.variable_key] || ""]))
+    }, selectedCapabilities);
+    const errors = validateVariables(loadedWorkflow.current.variable_keys, next, selectedCapabilities);
+    const invalid = Object.keys(errors).filter(key => !/^input\.image_\d+$/.test(key));
+    if (invalid.length) { setMessage(`Preset “${preset.name}” contains settings that are no longer valid.`); return; }
+    liveVariables.current = next;
+    setVariables(next);
+    setSeedMode(preset.seed_mode || "fixed");
+    if (canReorderReferences && Array.isArray(preset.reference_order) &&
+        preset.reference_order.length === baseReferenceSlots.length &&
+        new Set(preset.reference_order).size === baseReferenceSlots.length &&
+        baseReferenceSlots.every(slot => preset.reference_order.includes(slot.variable_key))) {
+      setReferenceOrder(preset.reference_order);
+    }
+    sourceJob.current = null;
+    setMessage(`Preset “${preset.name}” applied. No Job was created.`);
+  }
+
+  function renamePreset(preset) {
+    const name = window.prompt("Rename preset", preset.name)?.trim();
+    if (!name || name === preset.name) return;
+    const duplicate = presets.some(item => item.id !== preset.id && item.name.toLowerCase() === name.toLowerCase());
+    if (duplicate) { setMessage("A preset with that name already exists."); return; }
+    persistPresets(presets.map(item => item.id === preset.id ? { ...item, name, updated_at: new Date().toISOString() } : item));
+  }
+
+  function deletePreset(preset) {
+    if (!window.confirm(`Delete preset “${preset.name}”?`)) return;
+    persistPresets(presets.filter(item => item.id !== preset.id));
+    setMessage(`Preset “${preset.name}” deleted. Existing Jobs were not changed.`);
+  }
+
+  function setDefaultPreset(preset) {
+    const next = presets.map(item => ({ ...item, is_default: item.id === preset.id }));
+    persistPresets(next);
+    defaultPresetApplied.current = "";
+    setMessage(`“${preset.name}” is now the default for this Workflow in this browser.`);
+  }
+
+  function moveReference(key, direction) {
+    if (!canReorderReferences) return;
+    setReferenceOrder(current => {
+      const order = current.length === baseReferenceSlots.length
+        ? [...current]
+        : baseReferenceSlots.map(slot => slot.variable_key);
+      const index = order.indexOf(key);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return order;
+      [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+      return order;
+    });
   }
 
   async function saveWorkflow() {
@@ -699,6 +936,7 @@ export default function App() {
       const parsed = JSON.parse(workflowJson);
       const id = workflowId.trim();
       if (!id) throw new Error("Workflow ID is required");
+      const capabilitySpec = capabilitySpecDraft.trim() ? JSON.parse(capabilitySpecDraft) : null;
 
       await api(`/workflows/${encodeURIComponent(id)}`, {
         method: "PUT",
@@ -706,16 +944,16 @@ export default function App() {
         body: JSON.stringify({
           id,
           name: workflowName.trim() || id,
-          api_prompt: parsed
+          api_prompt: parsed,
+          capability_spec: capabilitySpec
         })
       });
 
       const keys = extractPlaceholders(parsed);
-      const nextVariables = normalizeVariables(keys, variables);
+      const nextVariables = normalizeVariables(keys, variables, selectedCapabilities);
       setVariables(nextVariables);
       setSelected(id);
       setUploadedNames({});
-      saveLocalVariables(id, nextVariables);
 
       await refreshWorkflows();
       await loadWorkflow(id, nextVariables);
@@ -734,6 +972,11 @@ export default function App() {
     setUploadingKey("");
     setFieldErrors({});
     loadedWorkflow.current = null;
+    defaultPresetApplied.current = "";
+    setSelectedCapabilities(null);
+    setCapabilitySpecDraft("");
+    setPresets([]);
+    setReferenceOrder([]);
     sourceJob.current = null;
     setWorkflowLoading(Boolean(id));
     setSelected(id);
@@ -745,19 +988,29 @@ export default function App() {
       if (request !== selectionRequest.current) return;
       const json = JSON.stringify(w.api_prompt, null, 2);
       const keys = extractPlaceholders(w.api_prompt);
-      const defaults = normalizeVariables(keys);
-      const nextVariables = restoredVariables === null
-        ? loadLocalVariables(id, keys)
-        : normalizeVariables(keys, restoredVariables);
+      const capabilities = w.capabilities || null;
+      const defaults = normalizeVariables(keys, {}, capabilities);
+      const local = restoredVariables === null
+        ? loadLocalVariables(id, keys, capabilities, w.capability_version)
+        : { variables: normalizeVariables(keys, restoredVariables, capabilities), incompatible: false };
+      const nextVariables = local.variables;
 
       setWorkflowId(w.id);
       setWorkflowName(w.name);
       setWorkflowJson(json);
+      setSelectedCapabilities(capabilities);
+      setCapabilitySpecDraft(w.capability_spec ? JSON.stringify(w.capability_spec, null, 2) : "");
+      setReferenceOrder((capabilities?.references || []).map(slot => slot.variable_key));
       setVariables(nextVariables);
       liveVariables.current = nextVariables;
       loadedWorkflow.current = w;
       workflowDefaults.current = { id: w.id, variables: JSON.parse(JSON.stringify(defaults)) };
       setVariablesDraft(JSON.stringify(nextVariables, null, 2));
+      setSeedMode(loadSeedMode(w.id, w.capability_version));
+      setPresets(loadPresets(w.id));
+      if (local.incompatible) {
+        setMessage("Saved values belonged to an older Workflow version. They were reset to the current defaults; review the form before running.");
+      }
       if (restoredVariables !== null) {
         const names = {};
         keys.filter(key => /^input\.image_\d+$/.test(key)).forEach(key => {
@@ -841,11 +1094,11 @@ export default function App() {
   function applyVariablesJson() {
     try {
       const parsed = JSON.parse(variablesDraft || "{}");
-      const next = normalizeVariables(placeholderKeys, parsed);
+      const next = normalizeVariables(placeholderKeys, parsed, selectedCapabilities);
       setVariables(next);
       liveVariables.current = next;
       setVariablesDraft(JSON.stringify(next, null, 2));
-      const errors = validateVariables(placeholderKeys, next);
+      const errors = validateVariables(placeholderKeys, next, selectedCapabilities);
       setFieldErrors(errors);
       setMessage(Object.keys(errors).length
         ? "Variables JSON applied. Correct the highlighted fields before generating."
@@ -901,7 +1154,7 @@ export default function App() {
     setUploadingKey("");
     const defaults = workflowDefaults.current.id === selected
       ? workflowDefaults.current.variables
-      : normalizeVariables(placeholderKeys);
+      : normalizeVariables(placeholderKeys, {}, selectedCapabilities);
     const next = JSON.parse(JSON.stringify(defaults));
     setVariables(next);
     liveVariables.current = next;
@@ -909,8 +1162,25 @@ export default function App() {
     setFieldErrors({});
     setVariablesDraft(JSON.stringify(next, null, 2));
     setFormRevision(version => version + 1);
+    setSeedMode("fixed");
+    setReferenceOrder(baseReferenceSlots.map(slot => slot.variable_key));
     sourceJob.current = null;
     setMessage("Form reset. Existing Jobs, outputs, connection settings and the applied token remain unchanged.");
+  }
+
+  function resetAdvancedSettings() {
+    const keys = new Set((selectedCapabilities?.fields || []).filter(field => field.advanced).map(field => field.variable_key));
+    const defaults = workflowDefaults.current.id === selected
+      ? workflowDefaults.current.variables
+      : normalizeVariables(placeholderKeys, {}, selectedCapabilities);
+    const next = { ...liveVariables.current };
+    for (const key of keys) next[key] = defaults[key];
+    liveVariables.current = next;
+    setVariables(next);
+    setSeedMode("fixed");
+    setFieldErrors(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => !keys.has(key))));
+    setVariablesDraft(JSON.stringify(next, null, 2));
+    setMessage("Advanced settings reset to this Workflow’s defaults. Prompts and reference images were preserved.");
   }
 
   function rememberSubmission(body) {
@@ -983,7 +1253,13 @@ export default function App() {
     const latest = readLatestVariables(loadedWorkflow.current.variable_keys || placeholderKeys);
     liveVariables.current = latest;
     setVariables(latest);
-    const errors = validateVariables(loadedWorkflow.current.variable_keys || placeholderKeys, latest);
+    const activeKeys = loadedWorkflow.current.variable_keys || placeholderKeys;
+    const submissionValues = { ...latest };
+    if (seedMode === "random" && loadedWorkflow.current.capabilities?.seed_variable) {
+      submissionValues[loadedWorkflow.current.capabilities.seed_variable] =
+        loadedWorkflow.current.capabilities.seed_range?.minimum ?? 0;
+    }
+    const errors = validateVariables(activeKeys, submissionValues, loadedWorkflow.current.capabilities);
     setFieldErrors(errors);
     if (uploadActive.current || uploadingKey) {
       setMessage("Wait for the reference image upload to finish before generating.");
@@ -1001,8 +1277,9 @@ export default function App() {
     setMessage("");
 
     try {
-      const snapshot = JSON.parse(JSON.stringify(latest));
-      const body = submissionBody(loadedWorkflow.current, snapshot, priority, requestId(), sourceJob.current);
+      const snapshot = JSON.parse(JSON.stringify(submissionValues));
+      const body = submissionBody(loadedWorkflow.current, snapshot, priority, requestId(), sourceJob.current, seedMode,
+        canReorderReferences ? referenceOrder : null);
       rememberSubmission(body);
       const out = await api("/jobs", {
         method: "POST",
@@ -1010,6 +1287,12 @@ export default function App() {
         body: JSON.stringify(body)
       });
 
+      const seedVariable = loadedWorkflow.current.capabilities?.seed_variable;
+      if (seedMode === "random" && seedVariable && Number.isSafeInteger(out.snapshot?.seed)) {
+        const updated = { ...liveVariables.current, [seedVariable]: out.snapshot.seed };
+        liveVariables.current = updated;
+        setVariables(updated);
+      }
       submissionAccepted(out);
       await refreshJobs();
     } catch (e) {
@@ -1168,7 +1451,10 @@ export default function App() {
           <select value={selected} onChange={e => loadWorkflow(e.target.value)}>
             <option value="">Choose...</option>
             {workflows.map(w => (
-              <option key={w.id} value={w.id}>{w.name}</option>
+              <option key={w.id} value={w.id}>
+                {w.name}{w.capabilities?.operation ? ` · ${w.capabilities.operation.replaceAll("_", " ")}` : ""}
+                {w.capabilities?.model?.name ? ` · ${w.capabilities.model.name}` : ""}
+              </option>
             ))}
           </select>
 
@@ -1208,6 +1494,14 @@ export default function App() {
           </p>
 
           <button disabled={busy} onClick={saveWorkflow}>Save workflow</button>
+          <details className="advanced capability-editor">
+            <summary>Workflow capability metadata</summary>
+            <p className="hint">Optional, versioned UI metadata. Every field must be an existing placeholder, and reference roles must map to a real LoadImage node. Sampler options and numeric ranges are enabled only when declared here.</p>
+            <textarea className="code compact" aria-label="Workflow capability metadata JSON"
+              value={capabilitySpecDraft} onChange={e => setCapabilitySpecDraft(e.target.value)}
+              placeholder={'{"schema_version":1,"operation":"image_edit","fields":{"generation.steps":{"kind":"integer","label":"Steps","minimum":1,"maximum":40,"default":8,"advanced":true}},"reference_inputs":[{"variable_key":"input.image_1","label":"Identity reference","role":"identity","order":0,"required":true}]}' }
+              spellCheck={false} />
+          </details>
         </article>
 
         <article className="card" id="inputs-run">
@@ -1216,6 +1510,46 @@ export default function App() {
           <p className="muted">
             Selected: <strong>{selectedName || "none"}</strong>
           </p>
+
+          {selectedCapabilities && (
+            <div className="workflow-capability-header">
+              <div><strong>{selectedCapabilities.operation?.replaceAll("_", " ") || "Workflow"}</strong>
+                {selectedCapabilities.model?.name && <span> · {selectedCapabilities.model.name}</span>}</div>
+              <span className="pill">Model availability unverified</span>
+              <p className="hint">Workflow {selectedCapabilities.workflow_version?.slice(0, 12)} · {baseReferenceSlots.length} reference slot(s) · {selectedCapabilities.outputs?.length || 0} declared output(s)</p>
+            </div>
+          )}
+
+          {selectedCapabilities && (
+            <details className="workflow-summary">
+              <summary>Workflow structure</summary>
+              {selectedCapabilities.workflow_summary?.available ? (
+                <>
+                  <p><strong>Inputs:</strong> {[...(selectedCapabilities.workflow_summary.inputs || []).map(item => `${item.label} (${item.role})`)].join(", ") || "No user inputs"}</p>
+                  <p><strong>Model:</strong> {selectedCapabilities.model?.name || "Model loader found; filename is configurable or not declared"}</p>
+                  <p><strong>LoRAs:</strong> {(selectedCapabilities.loras || []).map(item => item.name || `Configurable LoRA at node ${item.node_id}`).join(", ") || "None found in this graph"}</p>
+                  <p><strong>Outputs:</strong> {(selectedCapabilities.outputs || []).map(item => item.media_type).join(", ") || "Output node not recognized"}</p>
+                  <details>
+                    <summary>Processing nodes and connections</summary>
+                    <ol>{(selectedCapabilities.workflow_summary.nodes || []).map(node => <li key={node.node_id}>{node.label} <span className="mono">({node.category})</span></li>)}</ol>
+                    <ul>{(selectedCapabilities.workflow_summary.edges || []).map((edge, index) => <li key={`${edge.from}-${edge.to}-${index}`}>Node {edge.from} → {edge.input} → node {edge.to}</li>)}</ul>
+                  </details>
+                </>
+              ) : <p className="hint">This Workflow has no valid saved API graph summary.</p>}
+            </details>
+          )}
+
+          {selected && canChooseAspectRatio && (
+            <div className="field-block aspect-ratio-control">
+              <label htmlFor="output-aspect-ratio">Output aspect ratio</label>
+              <select id="output-aspect-ratio" value={currentAspectRatio}
+                onChange={event => setAspectRatio(event.target.value)}>
+                <option value="custom">Custom · {variables[widthKey] || "?"} × {variables[heightKey] || "?"}</option>
+                {ASPECT_RATIOS.map(ratio => <option value={ratio.label} key={ratio.label}>{ratio.label}</option>)}
+              </select>
+              <p className="hint">Choosing a ratio updates the saved Workflow’s width and height inputs. Published limits and steps are applied.</p>
+            </div>
+          )}
 
           {!selected && (
             <div className="empty-state">
@@ -1229,11 +1563,22 @@ export default function App() {
             </div>
           )}
 
-          {selected && placeholderKeys.map(key => (
+          {selected && regularFieldKeys.map((key, index) => (
             <VariableField
               key={`${key}:${formRevision}`}
               variableKey={key}
               value={variables[key]}
+              definition={fieldByKey.get(key)}
+              reference={referenceByKey.get(key)}
+              labelOverride={canReorderReferences && referenceByKey.has(key)
+                ? `Image reference ${referenceOrder.indexOf(key) + 1}` : ""}
+              reorderControl={canReorderReferences && referenceByKey.has(key) ? {
+                upEnabled: referenceOrder.indexOf(key) > 0,
+                downEnabled: referenceOrder.indexOf(key) < referenceOrder.length - 1,
+                moveUp: () => moveReference(key, -1),
+                moveDown: () => moveReference(key, 1)
+              } : null}
+              disabled={seedMode === "random" && key === selectedCapabilities?.seed_variable}
               uploadedName={uploadedNames[key]}
               uploading={Boolean(uploadingKey)}
               isUploading={uploadingKey === key}
@@ -1246,6 +1591,66 @@ export default function App() {
               onPastePrompt={pastePrompt}
             />
           ))}
+
+          {selected && advancedFieldKeys.length > 0 && (
+            <details className="advanced-settings">
+              <summary>Advanced settings <span className="counter">{advancedFieldKeys.length}</span></summary>
+              {selectedCapabilities?.seed_variable && (
+                <div className="field-block">
+                  <label htmlFor="seed-mode">Seed mode</label>
+                  <select id="seed-mode" value={seedMode} onChange={e => setSeedMode(e.target.value)}>
+                    <option value="fixed">Fixed seed · reuse the entered value</option>
+                    <option value="random">Random seed · resolve a new value when submitted</option>
+                  </select>
+                  <p className="hint">The resolved seed is saved in the Job snapshot. Repeatability depends on model and runtime conditions.</p>
+                </div>
+              )}
+              {advancedFieldKeys.map(key => (
+                <VariableField key={`${key}:${formRevision}`} variableKey={key} value={variables[key]}
+                  definition={fieldByKey.get(key)} reference={referenceByKey.get(key)}
+                  disabled={seedMode === "random" && key === selectedCapabilities?.seed_variable}
+                  uploadedName={uploadedNames[key]} uploading={Boolean(uploadingKey)} isUploading={uploadingKey === key}
+                  error={fieldErrors[key]} onFieldRef={captureFieldRef} onChange={updateVariable}
+                  onUpload={uploadFile} onClearUpload={clearUpload} onRandomizeSeed={randomizeSeed} onPastePrompt={pastePrompt} />
+              ))}
+              <button type="button" className="ghost" onClick={resetAdvancedSettings}>Reset advanced settings</button>
+            </details>
+          )}
+
+          {selected && (
+            <details className="preset-panel">
+              <summary>Personal presets <span className="counter">{presets.length}</span></summary>
+              <p className="hint">Presets are stored in this browser only. Reference images and temporary upload links are never saved. Compatible version checks prevent silently applying old settings.</p>
+              <div className="preset-create">
+                <label htmlFor="preset-name">Preset name</label>
+                <input id="preset-name" value={presetName} maxLength={80} onChange={e => setPresetName(e.target.value)} placeholder="e.g. Portrait · soft light" />
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={includePromptsInPreset} onChange={e => setIncludePromptsInPreset(e.target.checked)} />
+                  <span>Include prompt text</span>
+                </label>
+                <button type="button" className="ghost" disabled={!loadedWorkflow.current || busy} onClick={savePreset}>Save preset</button>
+              </div>
+              {presets.length === 0 ? <p className="hint">No saved presets for this Workflow.</p> : (
+                <div className="preset-list">
+                  {presets.map(preset => {
+                    const compatible = preset.capability_version === selectedCapabilities?.capability_version &&
+                      preset.workflow_version === loadedWorkflow.current?.workflow_version;
+                    return <div className="preset-row" key={preset.id}>
+                      <div><strong>{preset.name}</strong>{preset.is_default && <span className="pill">Default</span>}
+                        <p className="hint">{compatible ? "Compatible" : "Needs review · Workflow changed"} · {preset.includes_prompts ? "includes prompts" : "settings only"}</p>
+                      </div>
+                      <div className="button-row">
+                        <button type="button" disabled={!compatible || busy} onClick={() => applyPreset(preset)}>Apply</button>
+                        <button type="button" className="ghost" onClick={() => setDefaultPreset(preset)}>Set default</button>
+                        <button type="button" className="ghost" onClick={() => renamePreset(preset)}>Rename</button>
+                        <button type="button" className="danger ghost" onClick={() => deletePreset(preset)}>Delete</button>
+                      </div>
+                    </div>;
+                  })}
+                </div>
+              )}
+            </details>
+          )}
 
           {selected && placeholderKeys.length > 0 && (
             <details className="advanced">
@@ -1394,6 +1799,11 @@ function TokenControl({ id, value, status, feedback, configured, onChange, onApp
 function VariableField({
   variableKey,
   value,
+  definition = null,
+  labelOverride = "",
+  disabled = false,
+  reference = null,
+  reorderControl = null,
   uploadedName,
   uploading,
   isUploading,
@@ -1405,11 +1815,18 @@ function VariableField({
   onRandomizeSeed,
   onPastePrompt
 }) {
-  const kind = variableKind(variableKey, value);
-  const label = friendlyLabel(variableKey);
+  const kind = variableKind(variableKey, value, definition);
+  const label = labelOverride || definition?.label || reference?.label || friendlyLabel(variableKey);
   const fieldId = `variable-${variableKey}`;
   const errorId = `error-${variableKey}`;
   const errorProps = error ? { "aria-invalid": true, "aria-describedby": errorId } : {};
+  const helpParts = [definition?.description];
+  if (definition?.minimum != null || definition?.maximum != null) {
+    helpParts.push(`Allowed: ${definition.minimum ?? "no minimum"}–${definition.maximum ?? "no maximum"}`);
+  }
+  if (definition?.default !== undefined && definition?.default !== null) helpParts.push(`Default: ${definition.default}`);
+  if (reference) helpParts.push(`${reference.role} reference · ${reference.required ? "required" : "optional"}`);
+  const help = helpParts.filter(Boolean).join(" · ");
 
   if (kind === "image") {
     return (
@@ -1419,7 +1836,7 @@ function VariableField({
           id={fieldId}
           type="file"
           accept="image/*"
-          disabled={uploading}
+          disabled={uploading || disabled}
           onChange={e => {
             const file = e.target.files?.[0];
             e.currentTarget.value = "";
@@ -1433,7 +1850,7 @@ function VariableField({
               ? "Uploading..."
               : value
                 ? `Ready${uploadedName ? ` · ${uploadedName}` : ""}`
-                : `Required placeholder: {{${variableKey}}}`}
+                : `${reference?.required === false ? "Optional" : "Required"} reference image`}
           </span>
           {value && (
             <button
@@ -1444,7 +1861,14 @@ function VariableField({
               Clear
             </button>
           )}
+          {reorderControl && (
+            <span className="reference-order-controls" aria-label={`Reorder ${label}`}>
+              <button type="button" className="link-button" disabled={!reorderControl.upEnabled} onClick={reorderControl.moveUp} aria-label={`Move ${label} up`}>↑</button>
+              <button type="button" className="link-button" disabled={!reorderControl.downEnabled} onClick={reorderControl.moveDown} aria-label={`Move ${label} down`}>↓</button>
+            </span>
+          )}
         </div>
+        {help && <p className="hint">{help}</p>}
         {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
@@ -1465,11 +1889,13 @@ function VariableField({
           ref={element => onFieldRef(variableKey, element)}
           className="runtime-textarea"
           value={value ?? ""}
+          disabled={disabled}
           onChange={e => onChange(variableKey, e.target.value)}
           onCompositionEnd={e => onChange(variableKey, e.currentTarget.value)}
           placeholder={`{{${variableKey}}}`}
           {...errorProps}
         />
+        {help && <p className="hint">{help}</p>}
         {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
@@ -1484,12 +1910,29 @@ function VariableField({
             type="checkbox"
             ref={element => onFieldRef(variableKey, element)}
             checked={Boolean(value)}
+            disabled={disabled}
             onChange={e => onChange(variableKey, e.target.checked)}
             {...errorProps}
           />
           <span>{label}</span>
         </label>
         <span className="hint"><code>{`{{${variableKey}}}`}</code></span>
+        {help && <p className="hint">{help}</p>}
+        {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
+      </div>
+    );
+  }
+
+  if (kind === "select") {
+    return (
+      <div className="field-block">
+        <label htmlFor={fieldId}>{label}</label>
+        <select id={fieldId} ref={element => onFieldRef(variableKey, element)} value={value ?? ""}
+          disabled={disabled} onChange={e => onChange(variableKey, e.target.value)} {...errorProps}>
+          <option value="" disabled>Choose…</option>
+          {(definition?.options || []).map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+        {help && <p className="hint">{help}</p>}
         {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
@@ -1497,6 +1940,9 @@ function VariableField({
 
   if (kind === "number") {
     const isSeed = /seed/i.test(variableKey);
+    const min = definition?.minimum;
+    const max = definition?.maximum;
+    const step = numberStep(variableKey, definition);
     return (
       <div className="field-block">
         <label htmlFor={fieldId}>{label}</label>
@@ -1505,8 +1951,11 @@ function VariableField({
             id={fieldId}
             type="number"
             ref={element => onFieldRef(variableKey, element)}
-            step={numberStep(variableKey)}
+            step={step}
+            min={min ?? undefined}
+            max={max ?? undefined}
             value={value ?? ""}
+            disabled={disabled}
             {...errorProps}
             onChange={e => {
               const raw = e.target.value;
@@ -1518,13 +1967,22 @@ function VariableField({
             <button
               type="button"
               className="ghost inline-button"
+              disabled={disabled}
               onClick={() => onRandomizeSeed(variableKey)}
             >
               Randomize
             </button>
           )}
         </div>
+        {Number.isFinite(min) && Number.isFinite(max) && max > min && (
+          <input className="range-control" type="range" min={min} max={max} step={step}
+            value={typeof value === "number" ? Math.min(max, Math.max(min, value)) : min}
+            disabled={disabled}
+            aria-label={`${label} range`}
+            onChange={e => onChange(variableKey, e.target.valueAsNumber)} />
+        )}
         <span className="hint"><code>{`{{${variableKey}}}`}</code></span>
+        {help && <p className="hint">{help}</p>}
         {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
       </div>
     );
@@ -1538,10 +1996,12 @@ function VariableField({
         type="text"
         ref={element => onFieldRef(variableKey, element)}
         value={value ?? ""}
+        disabled={disabled}
         onChange={e => onChange(variableKey, e.target.value)}
         placeholder={`{{${variableKey}}}`}
         {...errorProps}
       />
+      {help && <p className="hint">{help}</p>}
       {error && <p className="field-error" id={errorId} role="alert">{error}</p>}
     </div>
   );
@@ -1572,6 +2032,7 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
 
   const retryable = RETRYABLE_STATES.has(job.state) && job.variables !== null;
   const canManage = adminReady && !disabled;
+  const snapshot = job.snapshot || null;
   return (
     <div className="job">
       <div className="job-top">
@@ -1597,6 +2058,29 @@ function Job({ job, fallbackPriority, disabled, adminReady, onEdit, onRetry, onD
           {loadingImages ? "Checking…" : "Check outputs"}
         </button>
       </div>
+      {snapshot && (
+        <details className="job-snapshot">
+          <summary>Settings used for this Job</summary>
+          <p><strong>Operation:</strong> {snapshot.operation || "unknown"} · <strong>Workflow:</strong> {snapshot.workflow_id || job.workflow_id}
+            {snapshot.workflow_version && <> · <strong>Version:</strong> {snapshot.workflow_version.slice(0, 12)}</>}</p>
+          {snapshot.model?.name && <p><strong>Model:</strong> {String(snapshot.model.name).split(/[\\/]/).pop()}</p>}
+          <p><strong>Seed:</strong> {snapshot.seed ?? "not recorded"} ({snapshot.seed_mode || "fixed"})
+            {snapshot.output_spec?.width && snapshot.output_spec?.height && <> · <strong>Output:</strong> {snapshot.output_spec.width} × {snapshot.output_spec.height}</>}
+            {snapshot.output_spec?.count && <> · <strong>Count:</strong> {snapshot.output_spec.count}</>}</p>
+          {snapshot.positive_prompt != null && <div><strong>Positive prompt</strong><pre className="prompt-preview" dir="auto">{snapshot.positive_prompt || "(empty)"}</pre></div>}
+          {snapshot.negative_prompt != null && <div><strong>Negative prompt</strong><pre className="prompt-preview" dir="auto">{snapshot.negative_prompt || "(empty)"}</pre></div>}
+          {(snapshot.references || []).length > 0 && <div><strong>Reference images</strong><ol>{snapshot.references.map((reference, index) =>
+            <li key={`${reference.variable}-${index}`}>{reference.label || reference.variable} · {reference.role} · slot {Number(reference.order) + 1}</li>)}</ol></div>}
+          {(snapshot.loras || []).length > 0 && <div><strong>LoRAs recorded</strong><ul>{snapshot.loras.map((lora, index) =>
+            <li key={`${lora.name}-${index}`}>{String(lora.name || "LoRA").split(/[\\/]/).pop()}
+              {lora.strength_model != null && <> · model {lora.strength_model}</>}
+              {lora.strength_clip != null && <> · CLIP {lora.strength_clip}</>}</li>)}</ul></div>}
+          {snapshot.workflow_summary?.available && <details>
+            <summary>Saved Workflow structure</summary>
+            <ol>{(snapshot.workflow_summary.nodes || []).map(node => <li key={node.node_id}>{node.label} <span className="mono">({node.category})</span></li>)}</ol>
+          </details>}
+        </details>
+      )}
       {images.length > 0 && (
         <div className="output-thumbnails">
           {images.map((image, index) => (

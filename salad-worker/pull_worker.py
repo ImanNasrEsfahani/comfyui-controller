@@ -6,6 +6,7 @@ is a localhost call to comfyui-api while a separate thread renews the lease.
 """
 import json
 import os
+import re
 import signal
 import socket
 import threading
@@ -22,6 +23,7 @@ POLL_SECONDS = max(3, int(os.environ.get("DIRECT_WORKER_POLL_SECONDS", "10")))
 HEARTBEAT_SECONDS = max(5, int(os.environ.get("DIRECT_WORKER_HEARTBEAT_SECONDS", "15")))
 JOB_TIMEOUT = max(60, int(os.environ.get("DIRECT_WORKER_JOB_TIMEOUT_SECONDS", "3600")))
 STOP = threading.Event()
+UNRESOLVED_BINDING = re.compile(r"\{\{(?:input|prompt|generation|output|lora)\.[A-Za-z0-9_.:-]+\}\}")
 
 
 def log(message):
@@ -40,8 +42,29 @@ def request(path, data=None, *, timeout=20):
         return json.loads(raw) if raw else None
 
 
+def build_comfy_payload(job):
+    """Pass the backend-rendered API graph through without rewriting it."""
+    request_data = job.get("request") if isinstance(job, dict) else None
+    prompt = request_data.get("prompt") if isinstance(request_data, dict) else None
+    if not isinstance(prompt, dict) or not prompt:
+        raise RuntimeError("Controller job has no rendered ComfyUI graph")
+
+    def check(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                check(child)
+        elif isinstance(value, list):
+            for child in value:
+                check(child)
+        elif isinstance(value, str) and UNRESOLVED_BINDING.search(value):
+            raise RuntimeError("Controller job contains an unresolved Workflow binding")
+
+    check(prompt)
+    return request_data
+
+
 def execute(job):
-    payload = json.dumps(job["request"]).encode()
+    payload = json.dumps(build_comfy_payload(job)).encode()
     req = urllib.request.Request(
         COMFY, data=payload, method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json"},
