@@ -82,6 +82,7 @@ def counters() -> dict:
         ).fetchall()
     result = {"pending": 0, "running": 0, "failed": 0, "succeeded": 0}
     result.update({r["state"]: r["n"] for r in rows})
+    result["uncertain"] = result.get("stalled", 0)
     # Finalizing still owns the single GPU lease and blocks dispatch/stop.
     result["running"] += result.get("finalizing", 0) + result.get("cancel_requested", 0)
     return result

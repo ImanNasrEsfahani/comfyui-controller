@@ -1,8 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any
 from uuid import uuid4
@@ -249,7 +248,7 @@ def upload(file: UploadFile = File(...), x_internal_token: str | None = Header(d
 
 @app.get("/api/jobs/{local_id}/assets/{asset_id}/download")
 def download_asset(local_id: str, asset_id: str, x_internal_token: str | None = Header(default=None)):
-    """Issue a short-lived private download URL only for this Job's verified Asset."""
+    """Stream this Job's verified output after controller authentication."""
     check_admin_token(x_internal_token)
     item = db.get_job(local_id)
     if not item or item.get("hidden"):
@@ -257,8 +256,38 @@ def download_asset(local_id: str, asset_id: str, x_internal_token: str | None = 
     asset = next((a for a in item.get("assets", []) if a.get("asset_id") == asset_id and a.get("status") == "available"), None)
     if not asset:
         raise HTTPException(404, "verified asset not found")
-    name = asset["storage_key"].rsplit("/", 1)[-1]
-    return RedirectResponse(storage.presign_get(asset["storage_key"], download_name=name), status_code=307)
+    key = asset.get("storage_key") or ""
+    if not key.startswith(f"outputs/{local_id}/") or ".." in key.split("/"):
+        raise HTTPException(404, "verified asset not found")
+    try:
+        stored = storage.get_object(key)
+        body = stored["Body"]
+    except Exception as exc:
+        # Keep provider details and object keys out of the public error.
+        raise HTTPException(404, "verified output is no longer available") from exc
+
+    name = key.rsplit("/", 1)[-1]
+    safe_name = re.sub(r"[\r\n\"\\]", "_", name)[:180] or "output"
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name) or "output"
+    from urllib.parse import quote
+    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
+
+    def chunks():
+        try:
+            yield from body.iter_chunks(chunk_size=1024 * 1024)
+        finally:
+            body.close()
+
+    headers = {
+        "Content-Disposition": disposition,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    content_length = stored.get("ContentLength")
+    if isinstance(content_length, int) and content_length >= 0:
+        headers["Content-Length"] = str(content_length)
+    return StreamingResponse(chunks(), media_type=asset.get("mime_type") or "application/octet-stream",
+                             headers=headers)
 
 
 def submit_job(workflow_id, variables, priority=None, *, client_request_id=None, workflow_version=None,

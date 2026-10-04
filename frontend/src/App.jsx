@@ -1,5 +1,6 @@
 import "./enhancements.css";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { assetDownloadPath, fetchAssetDownload } from "./download.js";
 import { mergeJob, mergeJobList, appendUniqueJobs, stagePercent, formatDuration, jobStateLabel,
   isStale, submissionBody, requestId, validateVariables, containsCredentialLikeData } from "./contracts.js";
 
@@ -2408,6 +2409,7 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
   const [images, setImages] = useState([]);
   const [imageError, setImageError] = useState("");
   const [loadingImages, setLoadingImages] = useState(false);
+  const [downloadingAssetId, setDownloadingAssetId] = useState("");
   const [lightbox, setLightbox] = useState(null);
   const [zoom, setZoom] = useState(1);
   const closeLightboxRef = useRef(null);
@@ -2529,9 +2531,34 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
   const expectedTiles = Math.max(0, Math.min(12, Number(snapshot?.output_spec?.count) || (active ? 1 : 0)) - activeAssetsCount);
   const selectedLightboxAsset = availableAssets.find(asset => (asset.asset_id || asset.storage_key || asset.key) === lightbox?.assetId);
 
-  function downloadUrl(asset) {
-    if (asset.asset_id) return `${API}/jobs/${encodeURIComponent(job.id)}/assets/${encodeURIComponent(asset.asset_id)}/download`;
-    return asset.url || "";
+  async function downloadAsset(asset) {
+    const assetId = asset?.asset_id;
+    if (!assetId) {
+      setImageError("This output has no verified asset ID. Use Check outputs to reload its saved metadata.");
+      return;
+    }
+    setDownloadingAssetId(assetId);
+    setImageError("");
+    try {
+      const {blob, filename} = await fetchAssetDownload({
+        url: assetDownloadPath(API, job.id, assetId), token: sessionToken, asset,
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      link.hidden = true;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      const message = error.message || "The output could not be downloaded.";
+      if (error.status === 404) await refreshImages();
+      setImageError(message);
+    } finally {
+      setDownloadingAssetId("");
+    }
   }
 
   return (
@@ -2661,7 +2688,10 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
                   {!available && <small>Transfer or file verification failed</small>}
                 </button>
                 {available && <div className="output-card-actions">
-                  <a className="ghost" href={downloadUrl(asset)} download>Download</a>
+                  <button type="button" className="ghost" disabled={!asset.asset_id || Boolean(downloadingAssetId)}
+                    onClick={() => downloadAsset(asset)}>
+                    {downloadingAssetId === asset.asset_id ? "Preparing download…" : "Download"}
+                  </button>
                   {!video && <>
                     <button type="button" className="ghost" disabled={disabled} onClick={() => onEditOutput(asset, job)}>Edit</button>
                     <button type="button" className="ghost" disabled={disabled || !asset.s3_uri} onClick={() => onUseReference(asset, job)}>Use as reference</button>
@@ -2686,7 +2716,10 @@ function Job({ job, fallbackPriority, disabled, adminReady, clock, comparisonSel
               <button type="button" className="ghost" onClick={() => setZoom(1)}>Reset zoom</button>
               <button type="button" className="ghost" disabled={availableAssets.length < 2} onClick={() => moveLightbox(-1)}>Previous</button>
               <button type="button" className="ghost" disabled={availableAssets.length < 2} onClick={() => moveLightbox(1)}>Next</button>
-              <a className="ghost" href={downloadUrl(selectedLightboxAsset)} download>Download original</a>
+              <button type="button" className="ghost" disabled={!selectedLightboxAsset.asset_id || Boolean(downloadingAssetId)}
+                onClick={() => downloadAsset(selectedLightboxAsset)}>
+                {downloadingAssetId === selectedLightboxAsset.asset_id ? "Preparing download…" : "Download original"}
+              </button>
               <button type="button" className="ghost" ref={closeLightboxRef} onClick={() => setLightbox(null)}>Close</button>
             </div>
           </header>

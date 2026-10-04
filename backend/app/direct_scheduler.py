@@ -47,7 +47,9 @@ def tick():
         # A failed stop is retried, but HOLD must never trigger a replacement.
         group = _safe_group()
         salad_control.status(group_data=group)
-        if not group.get("pending_change") and (group.get("current_state") or {}).get("status") != "stopped":
+        activity = db.activity_counts()
+        if (not activity["stop_blocked"] and not group.get("pending_change") and
+                (group.get("current_state") or {}).get("status") != "stopped"):
             salad_control.stop(source="scheduler_hold", hold_shutdown=True)
         return
     group = _safe_group()
@@ -55,6 +57,10 @@ def tick():
     # scheduler progress must not depend on an open browser dashboard.
     salad_control.status(group_data=group)
     if group.get("pending_change"):
+        return
+    # A stalled Job has an unknown remote execution outcome. Keep the current
+    # allocation unchanged and avoid both shutdown and automatic replacement.
+    if counts.get("uncertain", 0):
         return
     now = time.time()
     desired = int(group.get("replicas") or 0)
@@ -72,7 +78,7 @@ def tick():
         reason = "GPU did not register within startup deadline" if boot_timed_out else "Direct worker heartbeat disappeared"
         queue.save_setting("direct_hold", reason)
         log.error("%s; HOLD activated. Manual reset required", reason)
-        if state != "stopped":
+        if state != "stopped" and not db.activity_counts()["stop_blocked"]:
             salad_control.stop(source="scheduler_hold", hold_shutdown=True)
         return
     if demand:
@@ -89,6 +95,10 @@ def tick():
             salad_control.set_replicas(1, source="scheduler")
             queue.save_setting("direct_boot_started", now)
             log.info("Requested exactly one GPU replica")
+        return
+    # Protect Jobs in any supported execution mode. A direct queue may be
+    # idle while a legacy Salad queue Job still owns the same GPU group.
+    if db.activity_counts()["stop_blocked"]:
         return
     # An empty queue is not a reason to kill a running job. Let its lease
     # expire/recover first; all running direct jobs are counted as demand.

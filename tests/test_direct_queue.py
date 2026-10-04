@@ -1,5 +1,6 @@
 """GPU-free regression tests: no Salad API calls and no R2 network access."""
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -126,12 +127,7 @@ def test_worker_endpoint_auth_and_local_submit(monkeypatch):
         done = api.post(f"/api/worker/complete/{result['id']}",
                         json={"lease_token": attempt["lease_token"], "attempt_id": attempt["attempt_id"], "output": {"images": [output_uri]}}, headers=headers)
         assert done.status_code == 200
-        job_status = api.get(
-            f"/api/jobs/{result['id']}",
-            headers={"X-Internal-Token": settings.internal_token},
-        )
-        assert job_status.status_code == 200, job_status.text
-        assert job_status.json()["state"] == "succeeded"
+        assert api.get(f"/api/jobs/{result['id']}", headers={"X-Internal-Token": settings.internal_token}).json()["state"] == "succeeded"
 
 
 def test_worker_failure_is_not_automatically_retried():
@@ -190,87 +186,98 @@ def test_original_gpu_runtime_dependencies_are_preserved():
 def test_scheduler_cold_start_is_single_request(monkeypatch):
     new_job()
     monkeypatch.setenv("DIRECT_GPU_AUTO_CONTROL", "true")
-    provider_calls = []
+    calls = []
     group = {
         "container": {"image": "ghcr.io/test/worker:direct", "command": []},
         "queue_connection": None, "queue_autoscaler": None,
         "restart_policy": "never", "replicas": 0, "pending_change": False,
         "current_state": {"status": "stopped"},
     }
-
-    def fake_request(method, suffix="", **kwargs):
-        if method == "GET" and suffix == "":
-            return group
-        if method == "GET" and suffix == "/instances":
-            return {"instances": []}
-        raise AssertionError(f"Unexpected Salad read: {method} {suffix}")
-
-    def fake_provider_call(method, suffix="", *, json_body=None):
-        provider_calls.append((method, suffix, {"json_body": json_body} if json_body is not None else {}))
-        return 202
-
     monkeypatch.setattr(salad_control, "_get_group", lambda _: group)
-    monkeypatch.setattr(salad_control, "request", fake_request)
-    monkeypatch.setattr(salad_control, "_provider_call", fake_provider_call)
+    monkeypatch.setattr(salad_control, "status", lambda group_data=None: None)
+    monkeypatch.setattr(salad_control, "start", lambda source="admin": calls.append(("start", source)))
+    monkeypatch.setattr(salad_control, "set_replicas",
+                        lambda replicas, source="admin": calls.append(("replicas", replicas, source)))
     direct_scheduler.tick()
-    assert provider_calls == [("POST", "/start", {})]
+    assert calls == [("start", "scheduler")]
     group["current_state"]["status"] = "running"
     direct_scheduler.tick()
-    assert provider_calls[-1] == ("PATCH", "", {"json_body": {"replicas": 1}})
-    assert len(provider_calls) == 2
+    assert calls[-1] == ("replicas", 1, "scheduler")
+    assert len(calls) == 2
     group["replicas"] = 1
     direct_scheduler.tick()
-    assert len(provider_calls) == 2  # no endless start/scale calls
+    assert len(calls) == 2  # no endless start/scale calls
 
 
-def test_forced_hold_shutdown_allows_pending_but_blocks_active_jobs(monkeypatch):
-    activity = {"pending": 1, "running": 0, "finalizing": 0, "uncertain": 0, "stop_blocked": True}
-    monkeypatch.setattr(db, "activity_counts", lambda: activity)
+@pytest.mark.parametrize("group_state", ["running", "stopped"])
+def test_scheduler_preserves_gpu_state_while_job_outcome_is_uncertain(monkeypatch, group_state):
+    new_job("uncertain-job")
+    assert db.update_job("uncertain-job", state="stalled", error="worker status unknown")
+    monkeypatch.setenv("DIRECT_GPU_AUTO_CONTROL", "true")
+    monkeypatch.setattr(direct_scheduler, "auto_enabled", lambda: True)
+    group = {
+        "container": {"image": "ghcr.io/test/worker:direct", "command": []},
+        "queue_connection": None, "queue_autoscaler": None,
+        "restart_policy": "never", "replicas": 1 if group_state == "running" else 0,
+        "pending_change": False, "current_state": {"status": group_state},
+    }
+    requests = []
+    monkeypatch.setattr(salad_control, "_get_group", lambda _: group)
+    monkeypatch.setattr(salad_control, "status", lambda group_data=None: None)
+    monkeypatch.setattr(salad_control, "request", lambda *args, **kwargs: requests.append((args, kwargs)))
+    dq.save_setting("direct_last_demand", time.time() - 10_000)
 
-    assert salad_control._activity_stop_guard(allow_pending=True) == activity
-    with pytest.raises(ValueError, match="Jobs are pending"):
-        salad_control._activity_stop_guard()
+    direct_scheduler.tick()
 
-    for key in ("running", "finalizing", "uncertain"):
-        unsafe_activity = {**activity, key: 1}
-        monkeypatch.setattr(db, "activity_counts", lambda value=unsafe_activity: value)
-        with pytest.raises(ValueError):
-            salad_control._activity_stop_guard(allow_pending=True)
+    assert dq.counters()["uncertain"] == 1
+    assert requests == []
 
 
-def test_scheduler_holds_and_stops_after_boot_timeout(monkeypatch):
+def test_scheduler_holds_after_boot_timeout_without_stopping_queued_jobs(monkeypatch):
     new_job()
     monkeypatch.setenv("DIRECT_GPU_AUTO_CONTROL", "true")
     monkeypatch.setenv("DIRECT_STARTUP_TIMEOUT_SECONDS", "600")
     now = time.time()
     dq.save_setting("direct_boot_started", now - 1000)
-    provider_calls = []
+    calls = []
     group = {
         "container": {"image": "ghcr.io/test/worker:direct", "command": []},
         "queue_connection": None, "queue_autoscaler": None,
         "restart_policy": "never", "replicas": 1, "pending_change": False,
         "current_state": {"status": "running"},
     }
-
-    def fake_request(method, suffix="", **kwargs):
-        if method == "GET" and suffix == "":
-            return group
-        if method == "GET" and suffix == "/instances":
-            return {"instances": []}
-        raise AssertionError(f"Unexpected Salad read: {method} {suffix}")
-
-    def fake_provider_call(method, suffix="", *, json_body=None):
-        provider_calls.append((method, suffix, {"json_body": json_body} if json_body is not None else {}))
-        return 202
-
     monkeypatch.setattr(salad_control, "_get_group", lambda _: group)
-    monkeypatch.setattr(salad_control, "request", fake_request)
-    monkeypatch.setattr(salad_control, "_provider_call", fake_provider_call)
+    monkeypatch.setattr(salad_control, "status", lambda group_data=None: None)
+    monkeypatch.setattr(salad_control, "stop", lambda **kwargs: calls.append(kwargs))
     direct_scheduler.tick()
-    assert provider_calls == [("POST", "/stop", {})]
+    assert calls == [], "a queued Job must not be stopped during an uncertain GPU startup"
     assert dq.load_setting("direct_hold")
     direct_scheduler.tick()
-    assert provider_calls == [("POST", "/stop", {})]  # do not repeat an unconfirmed operation
+    assert calls == [], "HOLD must keep waiting while queued or active Jobs exist"
+
+
+def test_stop_is_blocked_for_pending_job_and_not_repeated_before_provider_confirmation(monkeypatch):
+    group = {
+        "pending_change": False,
+        "queue_autoscaler": None,
+        "replicas": 1,
+        "current_state": {"status": "running"},
+    }
+    provider_calls = []
+    monkeypatch.setattr(salad_control, "request", lambda method, suffix="", **kwargs: group)
+    monkeypatch.setattr(salad_control, "_provider_call",
+                        lambda method, suffix="", **kwargs: provider_calls.append((method, suffix, kwargs)) or 202)
+
+    new_job("queued-stop-guard")
+    with pytest.raises(ValueError, match="Stop is blocked"):
+        salad_control.stop(source="test")
+    assert provider_calls == []
+
+    assert db.update_job("queued-stop-guard", state="failed", error="test complete")
+    first = salad_control.stop(source="test")
+    second = salad_control.stop(source="test")
+    assert first["pending"] is True and second["pending"] is True
+    assert len(provider_calls) == 1, "a stop awaiting provider confirmation must not be sent twice"
 
 
 def test_presigned_inputs_are_renewed_at_claim(monkeypatch):
@@ -311,12 +318,9 @@ def test_gpu_worker_posts_exact_comfy_request(monkeypatch):
                        "s3": {"bucket": "comfy", "prefix": "outputs/j/", "async": False}}}
     out = module.execute(job)
     assert sent["url"].endswith("/prompt")
-    assert sent["body"]["id"] == job["request"]["id"]
-    assert sent["body"]["prompt"] == job["request"]["prompt"]
-    assert sent["body"]["s3"] == job["request"]["s3"]
-    assert isinstance(sent["body"].get("client_id"), str)
-    assert len(sent["body"]["client_id"]) == 32
-    assert "client_id" not in job["request"]  # adding WebSocket routing must not mutate the stored Job
+    assert sent["body"] == {**job["request"], "client_id": sent["body"]["client_id"]}
+    assert re.fullmatch(r"[0-9a-f]{32}", sent["body"]["client_id"])
+    assert "client_id" not in job["request"], "the ComfyUI correlation ID must not mutate the saved request"
     assert out["status"] == "succeeded"
     assert sent["timeout"] >= 60
 

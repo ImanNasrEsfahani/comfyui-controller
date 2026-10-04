@@ -34,6 +34,11 @@ def upload_fileobj(fileobj, key: str, content_type: str | None = None):
     return key
 
 
+def get_object(key: str):
+    """Open an object for a controller-authenticated, streamed download."""
+    return client().get_object(Bucket=settings.r2_bucket, Key=key)
+
+
 def presign_get(key: str, ttl: int | None = None, *, download_name: str | None = None):
     params = {"Bucket": settings.r2_bucket, "Key": key}
     if download_name:

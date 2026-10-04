@@ -109,6 +109,7 @@ def test_upload_rejects_files_over_configured_limit(monkeypatch):
 
 def test_verified_output_can_be_reused_as_reference_and_download_is_job_scoped(monkeypatch):
     source = submit()
+    other_job = submit(request("A different private Job", "another-job"))
     key = f"outputs/{source['id']}/attempt-a/generated.png"
     asset = {"asset_id": "verified-output-1", "job_id": source["id"], "attempt_id": "attempt-a",
         "storage_key": key, "media_type": "image", "mime_type": "image/png", "width": 12, "height": 8,
@@ -125,15 +126,33 @@ def test_verified_output_can_be_reused_as_reference_and_download_is_job_scoped(m
         "workflow_version": contracts.digest(workflow), "priority": "medium",
         "variables": {"prompt.user": "reuse", "input.image_1": uri}}
     monkeypatch.setattr(storage, "presign_get", lambda storage_key, *args, **kwargs: "https://signed.invalid/download")
+    class StreamBody:
+        closed = False
+        def iter_chunks(self, chunk_size):
+            assert chunk_size == 1024 * 1024
+            yield b"image-bytes-"
+            yield b"here"
+        def close(self):
+            self.closed = True
+    body = StreamBody()
+    monkeypatch.setattr(storage, "get_object", lambda storage_key: {
+        "Body": body, "ContentLength": 16, "ContentType": "image/png"})
     with TestClient(app) as client:
         accepted = client.post("/api/jobs", json=request_body, headers=ADMIN)
         downloaded = client.get(f"/api/jobs/{source['id']}/assets/verified-output-1/download", headers=ADMIN, follow_redirects=False)
-        wrong_job = client.get(f"/api/jobs/{source['id']}/assets/not-this-asset/download", headers=ADMIN, follow_redirects=False)
+        wrong_job = client.get(f"/api/jobs/{other_job['id']}/assets/verified-output-1/download", headers=ADMIN, follow_redirects=False)
+        unauthenticated = client.get(f"/api/jobs/{source['id']}/assets/verified-output-1/download")
     assert accepted.status_code == 200, accepted.text
     reference = accepted.json()["snapshot"]["references"][0]
     assert reference["uri"] == uri and reference["asset_id"] == "verified-output-1" and reference["source_job_id"] == source["id"]
-    assert downloaded.status_code == 307 and downloaded.headers["location"] == "https://signed.invalid/download"
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"image-bytes-here"
+    assert downloaded.headers["content-disposition"].endswith("filename*=UTF-8''generated.png")
+    assert downloaded.headers["cache-control"] == "private, no-store"
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    assert body.closed
     assert wrong_job.status_code == 404
+    assert unauthenticated.status_code == 401
 
 
 def complete(job, claim, filenames=("image.png",)):

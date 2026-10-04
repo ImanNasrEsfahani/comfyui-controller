@@ -21,11 +21,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Validate direct queue before expensive GPU image build
         run: |
           python3 -m pip install -q -r backend/requirements.txt pytest
-          PYTHONPATH=backend python3 -m pytest -q tests/test_direct_queue.py
+          PYTHONPATH=backend python3 -m pytest -q tests tests/check_frontend_backend_upgrade.py
           bash -n salad-worker/start.sh
+          python3 -m compileall -q backend/app salad-worker
+
+      - name: Run frontend regression tests and build
+        run: |
+          node --test tests/*.mjs
+          npm --prefix frontend install --no-audit --no-fund
+          npm --prefix frontend run build
 
       - name: Free runner disk space
         shell: bash
