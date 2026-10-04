@@ -126,7 +126,12 @@ def test_worker_endpoint_auth_and_local_submit(monkeypatch):
         done = api.post(f"/api/worker/complete/{result['id']}",
                         json={"lease_token": attempt["lease_token"], "attempt_id": attempt["attempt_id"], "output": {"images": [output_uri]}}, headers=headers)
         assert done.status_code == 200
-        assert api.get(f"/api/jobs/{result['id']}").json()["state"] == "succeeded"
+        job_status = api.get(
+            f"/api/jobs/{result['id']}",
+            headers={"X-Internal-Token": settings.internal_token},
+        )
+        assert job_status.status_code == 200, job_status.text
+        assert job_status.json()["state"] == "succeeded"
 
 
 def test_worker_failure_is_not_automatically_retried():
@@ -185,24 +190,52 @@ def test_original_gpu_runtime_dependencies_are_preserved():
 def test_scheduler_cold_start_is_single_request(monkeypatch):
     new_job()
     monkeypatch.setenv("DIRECT_GPU_AUTO_CONTROL", "true")
-    calls = []
+    provider_calls = []
     group = {
         "container": {"image": "ghcr.io/test/worker:direct", "command": []},
         "queue_connection": None, "queue_autoscaler": None,
         "restart_policy": "never", "replicas": 0, "pending_change": False,
         "current_state": {"status": "stopped"},
     }
+
+    def fake_request(method, suffix="", **kwargs):
+        if method == "GET" and suffix == "":
+            return group
+        if method == "GET" and suffix == "/instances":
+            return {"instances": []}
+        raise AssertionError(f"Unexpected Salad read: {method} {suffix}")
+
+    def fake_provider_call(method, suffix="", *, json_body=None):
+        provider_calls.append((method, suffix, {"json_body": json_body} if json_body is not None else {}))
+        return 202
+
     monkeypatch.setattr(salad_control, "_get_group", lambda _: group)
-    monkeypatch.setattr(salad_control, "request", lambda method, suffix="", **kwargs: calls.append((method, suffix, kwargs)))
+    monkeypatch.setattr(salad_control, "request", fake_request)
+    monkeypatch.setattr(salad_control, "_provider_call", fake_provider_call)
     direct_scheduler.tick()
-    assert calls == [("POST", "/start", {})]
+    assert provider_calls == [("POST", "/start", {})]
     group["current_state"]["status"] = "running"
     direct_scheduler.tick()
-    assert calls[-1] == ("PATCH", "", {"json_body": {"replicas": 1}})
-    assert len(calls) == 2
+    assert provider_calls[-1] == ("PATCH", "", {"json_body": {"replicas": 1}})
+    assert len(provider_calls) == 2
     group["replicas"] = 1
     direct_scheduler.tick()
-    assert len(calls) == 2  # no endless start/scale calls
+    assert len(provider_calls) == 2  # no endless start/scale calls
+
+
+def test_forced_hold_shutdown_allows_pending_but_blocks_active_jobs(monkeypatch):
+    activity = {"pending": 1, "running": 0, "finalizing": 0, "uncertain": 0, "stop_blocked": True}
+    monkeypatch.setattr(db, "activity_counts", lambda: activity)
+
+    assert salad_control._activity_stop_guard(allow_pending=True) == activity
+    with pytest.raises(ValueError, match="Jobs are pending"):
+        salad_control._activity_stop_guard()
+
+    for key in ("running", "finalizing", "uncertain"):
+        unsafe_activity = {**activity, key: 1}
+        monkeypatch.setattr(db, "activity_counts", lambda value=unsafe_activity: value)
+        with pytest.raises(ValueError):
+            salad_control._activity_stop_guard(allow_pending=True)
 
 
 def test_scheduler_holds_and_stops_after_boot_timeout(monkeypatch):
@@ -211,19 +244,33 @@ def test_scheduler_holds_and_stops_after_boot_timeout(monkeypatch):
     monkeypatch.setenv("DIRECT_STARTUP_TIMEOUT_SECONDS", "600")
     now = time.time()
     dq.save_setting("direct_boot_started", now - 1000)
-    calls = []
-    monkeypatch.setattr(salad_control, "_get_group", lambda _: {
+    provider_calls = []
+    group = {
         "container": {"image": "ghcr.io/test/worker:direct", "command": []},
         "queue_connection": None, "queue_autoscaler": None,
         "restart_policy": "never", "replicas": 1, "pending_change": False,
         "current_state": {"status": "running"},
-    })
-    monkeypatch.setattr(salad_control, "request", lambda method, suffix="", **kwargs: calls.append((method, suffix)))
+    }
+
+    def fake_request(method, suffix="", **kwargs):
+        if method == "GET" and suffix == "":
+            return group
+        if method == "GET" and suffix == "/instances":
+            return {"instances": []}
+        raise AssertionError(f"Unexpected Salad read: {method} {suffix}")
+
+    def fake_provider_call(method, suffix="", *, json_body=None):
+        provider_calls.append((method, suffix, {"json_body": json_body} if json_body is not None else {}))
+        return 202
+
+    monkeypatch.setattr(salad_control, "_get_group", lambda _: group)
+    monkeypatch.setattr(salad_control, "request", fake_request)
+    monkeypatch.setattr(salad_control, "_provider_call", fake_provider_call)
     direct_scheduler.tick()
-    assert calls == [("POST", "/stop")]
+    assert provider_calls == [("POST", "/stop", {})]
     assert dq.load_setting("direct_hold")
     direct_scheduler.tick()
-    assert all(call == ("POST", "/stop") for call in calls)
+    assert provider_calls == [("POST", "/stop", {})]  # do not repeat an unconfirmed operation
 
 
 def test_presigned_inputs_are_renewed_at_claim(monkeypatch):
@@ -264,7 +311,12 @@ def test_gpu_worker_posts_exact_comfy_request(monkeypatch):
                        "s3": {"bucket": "comfy", "prefix": "outputs/j/", "async": False}}}
     out = module.execute(job)
     assert sent["url"].endswith("/prompt")
-    assert sent["body"] == job["request"]
+    assert sent["body"]["id"] == job["request"]["id"]
+    assert sent["body"]["prompt"] == job["request"]["prompt"]
+    assert sent["body"]["s3"] == job["request"]["s3"]
+    assert isinstance(sent["body"].get("client_id"), str)
+    assert len(sent["body"]["client_id"]) == 32
+    assert "client_id" not in job["request"]  # adding WebSocket routing must not mutate the stored Job
     assert out["status"] == "succeeded"
     assert sent["timeout"] >= 60
 

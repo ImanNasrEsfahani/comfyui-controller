@@ -114,9 +114,15 @@ def _adopt_provider_transition(action, source, target, detail):
             "status": "awaiting_confirmation", "message": detail}
 
 
-def _activity_stop_guard():
+def _activity_stop_guard(*, allow_pending=False):
     activity = db.activity_counts()
-    if activity["stop_blocked"]:
+    blocked = (
+        activity["running"]
+        or activity["finalizing"]
+        or activity["uncertain"]
+        or (activity["pending"] and not allow_pending)
+    )
+    if blocked:
         raise ValueError(
             "Stop is blocked while Jobs are pending, running, finalizing/transferring, or have uncertain status "
             f"(pending={activity['pending']}, running={activity['running']}, "
@@ -169,7 +175,10 @@ def stop(source="admin", *, hold_shutdown=False):
     group = request("GET")
     if group.get("pending_change"):
         raise ValueError("A Salad configuration change is still pending")
-    _activity_stop_guard()
+    # A failed cold start must still be stoppable while Jobs remain queued.
+    # Pending Jobs are safe to retain in the controller; active, finalizing,
+    # and uncertain Jobs continue to block a forced shutdown.
+    _activity_stop_guard(allow_pending=hold_shutdown)
     if direct_queue.enabled():
         if direct_queue.load_setting("direct_keep_warm", False) and not hold_shutdown:
             raise ValueError("Keep Warm is enabled. Disable it before stopping")
