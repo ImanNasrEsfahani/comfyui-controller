@@ -354,7 +354,10 @@ def test_infrastructure_financial_unknowns_sessions_secrets_and_freshness(monkey
     queue.worker_seen("worker")
     first = salad_control.status()
     assert first["worker_status"] == "connected"
-    assert first["readiness"] is None and first["instances"][0]["ready"] is None
+    assert first["readiness"] == "unknown"
+    assert first["worker"]["runtime_readiness"] == "unknown"
+    assert "runtime readiness is not verified" in first["readiness_reason"]
+    assert "ready" not in first["instances"][0]
     assert first["instances"][0]["provider_ready"] is True
     assert first["instances"][0]["pull_progress"]["unit"] is None
     assert first["financial"]["balance"] is None and first["financial"]["estimated_cost"] is None
@@ -362,7 +365,8 @@ def test_infrastructure_financial_unknowns_sessions_secrets_and_freshness(monkey
     assert first["sessions"][0]["first_ready_at"] is None
     observed.clear(); group["replicas"] = 0
     newer = salad_control.status()
-    assert newer["worker_status"] == "unknown" and newer["sessions"][0]["stopped_at"]
+    assert newer["worker_status"] == "disconnected" and newer["sessions"][0]["stopped_at"]
+    assert newer["readiness"] == "not_ready"
     assert instance_contract.record(first, first["version"], first["last_updated_at"]) == newer
     assert newer["version"] > first["version"]
 
@@ -378,6 +382,26 @@ def test_legacy_migration_retains_exact_payloads_and_unknown_historic_times(tmp_
     assert row["request"] == {"original": 1} and row["output"] == {"legacy": True}
     assert row["snapshot"] is None and row["started_at"] is None and row["finished_at"] is None
     assert row["attempt_history"] == [] and row["salad_job_id"] == "remote"
+
+
+def test_failed_database_migration_rolls_back_schema_and_state_guards(monkeypatch):
+    job = submit()
+    real_migrate = db.job_records.migrate
+
+    def fail_migration(conn):
+        real_migrate(conn)
+        conn.execute("ALTER TABLE jobs ADD COLUMN rollback_probe TEXT")
+        conn.execute("DROP TRIGGER jobs_transition_guard")
+        raise RuntimeError("controlled migration failure")
+
+    monkeypatch.setattr(db.job_records, "migrate", fail_migration)
+    with pytest.raises(RuntimeError, match="controlled migration failure"):
+        db.init_db()
+    with db.connect() as conn:
+        assert "rollback_probe" not in {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs_transition_guard'").fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="invalid Job transition"):
+            conn.execute("UPDATE jobs SET state='submit_failed' WHERE id=?", (job["id"],))
 
 
 def test_fixed_workflow_capabilities_are_descriptive_not_invented():

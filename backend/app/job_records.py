@@ -1,5 +1,6 @@
 """PDF-44/46/47 additive SQLite records and guarded, versioned transitions."""
 import json
+import sqlite3
 from uuid import uuid4
 from datetime import datetime, timezone
 
@@ -25,6 +26,22 @@ TRANSITIONS = {
 }
 
 
+def execute_schema(c, script):
+    """Execute schema statements without executescript's implicit COMMIT.
+
+    Keep the caller's write lock through ALTERs and trigger replacement.
+    complete_statement also handles semicolons inside trigger bodies.
+    """
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            c.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("Incomplete schema statement")
+
+
 def migrate(c):
     cols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
     additions = {"client_request_id": "TEXT", "request_hash": "TEXT", "snapshot_json": "TEXT",
@@ -34,7 +51,7 @@ def migrate(c):
     for name, ddl in additions.items():
         if name not in cols:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {name} {ddl}")
-    c.executescript("""
+    execute_schema(c, """
       CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_client_request ON jobs(client_request_id)
         WHERE client_request_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS job_attempts (
@@ -128,7 +145,7 @@ def migrate(c):
     c.execute(f"""CREATE TRIGGER jobs_transition_guard BEFORE UPDATE OF state ON jobs
       WHEN NEW.state!=OLD.state AND NOT ({allowed} OR {retry})
       BEGIN SELECT RAISE(ABORT,'invalid Job transition'); END""")
-    c.executescript("""
+    execute_schema(c, """
       CREATE TRIGGER IF NOT EXISTS jobs_success_requires_assets BEFORE UPDATE OF state ON jobs
       WHEN NEW.state='succeeded' AND NEW.snapshot_json IS NOT NULL
         AND (OLD.state!='finalizing' OR NOT EXISTS (

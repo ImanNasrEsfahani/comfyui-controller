@@ -10,12 +10,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+DEPLOY_ENV = {}
 for raw in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
     line = raw.strip()
     if line and not line.startswith("#") and "=" in line:
         key, value = line.split("=", 1)
-        os.environ[key] = value.strip().strip('"')
-os.environ.update({
+        DEPLOY_ENV[key] = value.strip().strip('"')
+DEPLOY_ENV.update({
+    "SALAD_CONTAINER_GROUP_NAME": "test-group",
+    "SALAD_CONTAINER_GROUP_DISPLAY_NAME": "Test Group",
+    "SALAD_IMAGE": "ghcr.io/test/worker:v1",
     "SALAD_API_KEY": "TEST_FAKE_KEY_NO_NETWORK",
     "R2_ACCESS_KEY_ID": "TEST_FAKE_R2_ID",
     "R2_SECRET_ACCESS_KEY": "TEST_FAKE_R2_SECRET",
@@ -25,7 +29,8 @@ spec = importlib.util.spec_from_file_location(
     "salad_bootstrap_under_test", ROOT / "salad-worker/deploy_salad.py"
 )
 d = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(d)
+with patch.dict(os.environ, DEPLOY_ENV):
+    spec.loader.exec_module(d)
 GPU = "test-gpu-id"
 
 
@@ -39,6 +44,11 @@ def group(replicas=0, status="deploying", pending=False):
 
 
 class BootstrapTests(unittest.TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, DEPLOY_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_default_create_stays_scale_to_zero(self):
         self.assertEqual(d.group_payload(GPU)["replicas"], 0)
         self.assertEqual(d.MIN_REPLICAS, 0)

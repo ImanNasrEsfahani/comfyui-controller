@@ -11,20 +11,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+DEPLOY_ENV = {}
 for raw in (ROOT / ".env.example").read_text().splitlines():
     line = raw.strip()
     if not line or line.startswith("#") or "=" not in line:
         continue
     key, value = line.split("=", 1)
-    os.environ[key] = value.strip().strip('"')
-os.environ["SALAD_API_KEY"] = "TEST_FAKE_KEY_NO_NETWORK"
-os.environ["R2_ACCESS_KEY_ID"] = "TEST_FAKE_R2_ID"
-os.environ["R2_SECRET_ACCESS_KEY"] = "TEST_FAKE_R2_SECRET"
-os.environ["R2_ENDPOINT_URL"] = "https://example.invalid"
+    DEPLOY_ENV[key] = value.strip().strip('"')
+DEPLOY_ENV.update({
+    "SALAD_CONTAINER_GROUP_NAME": "test-group",
+    "SALAD_CONTAINER_GROUP_DISPLAY_NAME": "Test Group",
+    "SALAD_IMAGE": "ghcr.io/test/worker:v1",
+    "SALAD_API_KEY": "TEST_FAKE_KEY_NO_NETWORK",
+    "R2_ACCESS_KEY_ID": "TEST_FAKE_R2_ID",
+    "R2_SECRET_ACCESS_KEY": "TEST_FAKE_R2_SECRET",
+    "R2_ENDPOINT_URL": "https://example.invalid",
+})
 
 spec = importlib.util.spec_from_file_location("salad_deployer", ROOT / "salad-worker/deploy_salad.py")
 d = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(d)
+with patch.dict(os.environ, DEPLOY_ENV):
+    spec.loader.exec_module(d)
 GPU_ID = "test-5090-class-id"
 
 
@@ -37,6 +44,12 @@ def queue():
 
 
 class EnvironmentOnlyDeploymentTests(unittest.TestCase):
+    def setUp(self):
+        # Collection and other tests must not change this deployer's snapshot.
+        env = patch.dict(os.environ, DEPLOY_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_all_hardware_and_names_come_from_env(self):
         payload = group()
         self.assertEqual(d.GROUP_NAME, os.environ["SALAD_CONTAINER_GROUP_NAME"])
@@ -206,13 +219,26 @@ def create_job(local_id, workflow_id, request_payload, *, priority="medium", sal
             self.assertEqual(len(list(root.glob(".comfyui-controller.env.backup-*"))), 1)
 
     def test_backend_reads_exact_queue_from_env(self):
-        sys.path.insert(0, str(ROOT / "backend"))
-        from app.config import settings
-        from app import salad
-        self.assertEqual(settings.salad_queue_name(), os.environ["SALAD_QUEUE_NAME"])
-        self.assertEqual(salad.queue_name_for_priority(None), os.environ["SALAD_QUEUE_NAME"])
-        with self.assertRaises(ValueError):
-            salad.queue_name_for_priority("high")
+        # Config is an import-time singleton; load it in a fresh process so
+        # another module's test settings cannot replace this test's .env.
+        result = subprocess.run(
+            [sys.executable, "-c", """
+import os
+from app.config import settings
+from app import salad
+assert settings.salad_queue_name() == os.environ["SALAD_QUEUE_NAME"]
+assert salad.queue_name_for_priority(None) == os.environ["SALAD_QUEUE_NAME"]
+try:
+    salad.queue_name_for_priority("high")
+except ValueError:
+    pass
+else:
+    raise AssertionError("A priority override must be rejected")
+"""],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(ROOT / "backend") + os.pathsep + os.environ.get("PYTHONPATH", "")},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

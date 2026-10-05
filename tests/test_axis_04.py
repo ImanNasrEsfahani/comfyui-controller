@@ -36,12 +36,14 @@ def isolated(tmp_path, monkeypatch):
     yield
 
 
-def new_job(job_id, *, prompt="A test image", snapshot=None, variables=None):
+def new_job(job_id, *, prompt="A test image", snapshot=None, variables=None, execution_mode="direct"):
     variables = variables if variables is not None else {"prompt.positive": prompt}
     return db.create_job(job_id, "test-tool", {
         "id": job_id, "prompt": {"1": {"class_type": "KSampler", "inputs": {"text": prompt}}},
         "s3": {"bucket": settings.r2_bucket, "prefix": f"outputs/{job_id}/"},
-    }, execution_mode="direct", salad_queue="direct", variables=variables, snapshot=snapshot)
+    }, execution_mode=execution_mode,
+       salad_queue="direct" if execution_mode == "direct" else settings.salad_queue_name(),
+       variables=variables, snapshot=snapshot)
 
 
 def worker_headers():
@@ -134,14 +136,15 @@ def test_cancel_without_worker_confirmation_becomes_uncertain_not_cancelled(monk
 
 def test_history_paginates_with_stable_cursor_and_exact_failed_filter():
     new_job("history-a", prompt="portrait of a mountain")
-    new_job("history-b", prompt="portrait of a river")
+    # A submission failure belongs to a provider Job still being submitted.
+    new_job("history-b", prompt="portrait of a river", execution_mode="salad_queue")
     new_job("history-c", prompt="city skyline")
+    assert db.update_job("history-a", state="failed")
+    assert db.update_job("history-b", state="submit_failed")
     with db.connect() as conn:
         conn.execute("UPDATE jobs SET created_at='2026-10-01T00:00:00+00:00' WHERE id='history-a'")
         conn.execute("UPDATE jobs SET created_at='2026-10-02T00:00:00+00:00' WHERE id='history-b'")
         conn.execute("UPDATE jobs SET created_at='2026-10-03T00:00:00+00:00' WHERE id='history-c'")
-        conn.execute("UPDATE jobs SET state='failed' WHERE id='history-a'")
-        conn.execute("UPDATE jobs SET state='submit_failed' WHERE id='history-b'")
     with TestClient(controller.app) as api:
         first = api.get("/api/jobs/history", params={"limit": 1}, headers=admin_headers()).json()
         second = api.get("/api/jobs/history", params={"limit": 1, "cursor": first["next_cursor"]}, headers=admin_headers()).json()

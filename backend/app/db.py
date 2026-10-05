@@ -28,7 +28,10 @@ def connect():
 def init_db():
     with connect() as c:
         c.execute("PRAGMA journal_mode=WAL")
-        c.executescript("""
+        # Serialize the entire migration across connections and processes.
+        # Schema helpers must not implicitly commit before all guards exist.
+        c.execute("BEGIN IMMEDIATE")
+        job_records.execute_schema(c, """
         CREATE TABLE IF NOT EXISTS workflows (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -56,7 +59,6 @@ def init_db():
             key TEXT PRIMARY KEY, value TEXT NOT NULL
         )""")
 
-        c.execute("BEGIN IMMEDIATE")
         workflow_cols = {row["name"] for row in c.execute("PRAGMA table_info(workflows)").fetchall()}
         if "capabilities_json" not in workflow_cols:
             # Additive: pre-catalog workflows remain available and get their

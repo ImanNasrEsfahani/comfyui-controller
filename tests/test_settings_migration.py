@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
-os.environ.update({
+TEST_ENV = {
     "APP_NAME": "test-controller", "DB_PATH": "/tmp/controller-settings-test.db",
     "MAX_UPLOAD_MB": "100", "APP_INTERNAL_TOKEN": "TEST_ADMIN_TOKEN",
     "SALAD_API_KEY": "TEST_SALAD_KEY", "SALAD_API_BASE_URL": "https://example.invalid",
@@ -22,7 +22,8 @@ os.environ.update({
     "R2_PRESIGN_TTL_SECONDS": "3600", "SALAD_IMAGE": "ghcr.io/test/worker:v1",
     "SALAD_CONTAINER_GROUP_NAME": "test-group-v1",
     "SALAD_CONTAINER_GROUP_DISPLAY_NAME": "Test Group V1",
-})
+    "DIRECT_QUEUE_ENABLED": "false",
+}
 
 # The standalone ZIP may be tested without all unchanged repository files.
 # In the real repository, import the actual queue client as usual.
@@ -31,12 +32,16 @@ if not (ROOT / "backend/app/salad.py").exists():
     salad_stub = types.ModuleType("app.salad")
     salad_stub.headers = lambda: {}
     sys.modules["app.salad"] = salad_stub
-from app import db, settings_store, salad_control
-from app.config import settings
+with patch.dict(os.environ, TEST_ENV):
+    from app import db, settings_store, salad_control
+    from app.config import settings
 
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
+        env = patch.dict(os.environ, TEST_ENV)
+        env.start()
+        self.addCleanup(env.stop)
         self.temp = tempfile.TemporaryDirectory()
         object.__setattr__(settings, "db_path", str(Path(self.temp.name) / "test.sqlite"))
         db.init_db()
