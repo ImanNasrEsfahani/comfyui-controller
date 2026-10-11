@@ -7,6 +7,8 @@ import {UserLayout,AdminLayout,AuthLayout,AppLink} from '../layouts/Layouts.jsx'
 import {JobsPage,JobDetails,LibraryPage,CreateImagePage,AccountSecurityPage,UnsupportedPage} from '../pages/UserPages.jsx';
 import {PersonalDashboard,ProfilePage,PreferencesPage,DataPage,AccountSecurityExtras} from '../pages/Phase05Pages.jsx';
 import {AdminOverview,AdminUsers,AdminUserDetail,AdminAudit} from '../pages/Phase05Admin.jsx';
+import {PrivateLibrary,PrivateAssetDetail,ReferenceDraftPanel} from '../pages/library/PrivateLibrary.jsx';
+import {Phase06JobDetails} from '../pages/library/Phase06Jobs.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -42,9 +44,10 @@ function Page(){
   }
   let title='داشبورد',node=<PersonalDashboard/>;
   if(route.path==='/jobs'){title='کارهای من';node=<JobsPage/>;}
-  else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<JobDetails selectedId={route.path.split('/')[2]}/>;}
-  else if(route.path==='/library'){title='کتابخانه';node=<LibraryPage/>;}
-  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<CreateImagePage/>;}
+  else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<Phase06JobDetails id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/library'){title='کتابخانه';node=<PrivateLibrary/>;}
+  else if(route.path.startsWith('/library/')){title='جزئیات فایل';node=<PrivateAssetDetail id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><CreateImagePage/><ReferenceDraftPanel/></>;}
   else if(route.path==='/account/security'){title='امنیت حساب';node=<><AccountSecurityPage/><AccountSecurityExtras/></>;}
   else if(route.path==='/account/profile'){title='پروفایل';node=<ProfilePage/>;}
   else if(route.path==='/account/preferences'){title='ترجیحات';node=<PreferencesPage/>;}

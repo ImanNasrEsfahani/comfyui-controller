@@ -1,0 +1,136 @@
+TAP version 13
+# Subtest: owner client sends cookies and CSRF but never legacy admin token
+ok 1 - owner client sends cookies and CSRF but never legacy admin token
+  ---
+  duration_ms: 1.22705
+  type: 'test'
+  ...
+# Subtest: cross-account session invalidates pending stale responses
+ok 2 - cross-account session invalidates pending stale responses
+  ---
+  duration_ms: 0.786936
+  type: 'test'
+  ...
+# Subtest: denies privileged/out-of-allowlist requests
+ok 3 - denies privileged/out-of-allowlist requests
+  ---
+  duration_ms: 1.489576
+  type: 'test'
+  ...
+# Subtest: route table maps the six auth routes and legacy redirects
+ok 4 - route table maps the six auth routes and legacy redirects
+  ---
+  duration_ms: 2.531087
+  type: 'test'
+  ...
+# Subtest: returnTo strictly user-scoped and same-origin
+ok 5 - returnTo strictly user-scoped and same-origin
+  ---
+  duration_ms: 0.405161
+  type: 'test'
+  ...
+# Subtest: admin permission requires backend roles
+ok 6 - admin permission requires backend roles
+  ---
+  duration_ms: 0.189075
+  type: 'test'
+  ...
+# Subtest: masked email avoids displaying full local part
+ok 7 - masked email avoids displaying full local part
+  ---
+  duration_ms: 0.111168
+  type: 'test'
+  ...
+# Subtest: auth fetch stays on allowed API endpoints and cookie-only
+ok 8 - auth fetch stays on allowed API endpoints and cookie-only
+  ---
+  duration_ms: 0.848019
+  type: 'test'
+  ...
+# Subtest: errors do not expose server-private messages
+ok 9 - errors do not expose server-private messages
+  ---
+  duration_ms: 0.785004
+  type: 'test'
+  ...
+# Subtest: owner client sends cookie/CSRF but never admin token
+ok 10 - owner client sends cookie/CSRF but never admin token
+  ---
+  duration_ms: 0.941761
+  type: 'test'
+  ...
+# Subtest: invalidation rejects request from previously authenticated account
+ok 11 - invalidation rejects request from previously authenticated account
+  ---
+  duration_ms: 0.688839
+  type: 'test'
+  ...
+# Subtest: owner client blocks legacy provider controls
+ok 12 - owner client blocks legacy provider controls
+  ---
+  duration_ms: 0.248415
+  type: 'test'
+  ...
+# Subtest: owner client storage cleanup removes old draft keys without touching unrelated data
+ok 13 - owner client storage cleanup removes old draft keys without touching unrelated data
+  ---
+  duration_ms: 0.336147
+  type: 'test'
+  ...
+# Subtest: new user/account/admin paths have exact scope and safe deep links
+ok 14 - new user/account/admin paths have exact scope and safe deep links
+  ---
+  duration_ms: 1.009272
+  type: 'test'
+  ...
+# Subtest: account request is strictly cookie-based, no admin/worker token
+ok 15 - account request is strictly cookie-based, no admin/worker token
+  ---
+  duration_ms: 1.292579
+  type: 'test'
+  ...
+# Subtest: 403 and 503 become user-safe errors without credential echo
+ok 16 - 403 and 503 become user-safe errors without credential echo
+  ---
+  duration_ms: 0.501226
+  type: 'test'
+  ...
+# Subtest: Media URL is ID only (no original key or arbitrary path)
+ok 17 - Media URL is ID only (no original key or arbitrary path)
+  ---
+  duration_ms: 1.766965
+  type: 'test'
+  ...
+# Subtest: Only recognized reference roles and slots
+ok 18 - Only recognized reference roles and slots
+  ---
+  duration_ms: 0.266722
+  type: 'test'
+  ...
+# Subtest: Owner client sends cookie and CSRF but never admin token
+ok 19 - Owner client sends cookie and CSRF but never admin token
+  ---
+  duration_ms: 0.483549
+  type: 'test'
+  ...
+# Subtest: Preview response uses owner cookie; rejects 404 without signed fallback
+ok 20 - Preview response uses owner cookie; rejects 404 without signed fallback
+  ---
+  duration_ms: 0.493935
+  type: 'test'
+  ...
+# Subtest: An unauthenticated session loses media requests
+ok 21 - An unauthenticated session loses media requests
+  ---
+  duration_ms: 0.260813
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 115.582889

@@ -1,0 +1,45 @@
+.p06-library {max-width:1200px;margin:auto;min-width:0}
+.p06-library h1 {font-size:clamp(1.5rem,3vw,2.3rem);margin:0 0 .5rem}
+.p06-library p {overflow-wrap:anywhere}
+.p06-top {display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.p06-filters {display:flex;align-items:end;gap:.75rem;margin:1.25rem 0;flex-wrap:wrap}
+.p06-filters label {min-width:11rem}
+.p06-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:1rem;margin:1rem 0}
+.p06-card {border:1px solid #344156;background:#141c28;border-radius:15px;overflow:hidden;min-width:0}
+.p06-thumb {display:grid;place-items:center;margin:0;padding:0;background:#0c121d;border:0;width:100%;aspect-ratio:4/3;min-height:132px;overflow:hidden;cursor:zoom-in}
+.p06-thumb img {display:block;width:100%;height:100%;object-fit:cover}
+.p06-thumb-empty {font-size:.9rem;color:#a3b3c9;max-width:90%;text-align:center}
+.p06-cardmeta {padding:.75rem .85rem;display:flex;align-items:start;justify-content:space-between;flex-wrap:wrap;gap:.4rem}
+.p06-cardmeta small {color:#b4c2d3}
+.p06-card-actions {display:flex;gap:.4rem;padding:.6rem;flex-wrap:wrap;border-top:1px solid #344156}
+.p06-card-actions button,.p06-card-actions a {font-size:.85rem;padding:.5rem .65rem;margin:0;min-height:40px}
+.p06-backdrop {position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.9);display:grid;place-items:center;padding:.3rem}
+.p06-viewer {width:min(100%,1600px);height:min(100dvh,1000px);display:flex;flex-direction:column;background:#090e17;border:1px solid #3b4758;border-radius:12px;color:#eef2f7;overflow:hidden}
+.p06-viewerbar,.p06-viewerfoot {display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.7rem 1rem;flex-wrap:wrap}
+.p06-actions {display:flex;gap:.3rem;flex-wrap:wrap}
+.p06-actions button,.p06-viewerbar button {padding:.5rem .7rem;min-height:40px;margin:0}
+.p06-stage {position:relative;flex:1;min-height:0;display:grid;place-items:center;overflow:hidden;touch-action:pan-y}
+.p06-stage video {max-height:100%;max-width:100%;object-fit:contain}
+.p06-image-stage {width:100%;height:100%;display:grid;place-items:center;position:relative;touch-action:none;cursor:grab;overflow:hidden}
+.p06-image-stage>img {width:100%;height:100%;object-fit:contain;user-select:none;pointer-events:none}
+.p06-compare {position:absolute;inset-block:0;inset-inline-start:0;overflow:hidden;border-inline-end:3px solid #fff;pointer-events:none}
+.p06-compare img {width:100%;height:100%;object-fit:contain}
+.p06-split {padding:.5rem 1rem;display:flex;gap:1rem;align-items:center}
+.p06-split input {flex:1}
+.p06-detail,.p06-reuse,.p06-empty {padding:1.25rem;background:#182332;border:1px solid #344156;border-radius:14px;margin-block:1rem;max-width:100%;overflow-wrap:anywhere}
+.p06-detail pre,.p06-reuse code {white-space:pre-wrap;overflow-wrap:anywhere}
+.p06-notice {padding:1rem;border-inline-start:3px solid #8fb3d8;background:#1a2b3b}
+.p06-upload {margin-block:1rem;padding:1rem;border:1px solid #344156;border-radius:14px}
+.p06-drop {border:2px dashed #7389a6;border-radius:12px;padding:1rem;margin-block:1rem;min-height:96px}
+.p06-upload-list {padding:0;list-style:none}
+.p06-upload-list li {display:flex;gap:1rem;border-bottom:1px solid #344156;padding:1rem 0;align-items:center;flex-wrap:wrap}
+.p06-upload-list img {width:96px;height:96px;object-fit:cover;border-radius:8px}
+.p06-upload-list li>div:nth-child(2) {min-width:min(100%,190px);flex:1}
+.p06-reorder {display:flex;gap:.4rem;flex-wrap:wrap}
+.p06-reorder button {margin:0}
+.p06-library button:focus-visible,.p06-library a:focus-visible,.p06-viewer button:focus-visible {outline:3px solid #9ac5ff;outline-offset:3px}
+@media(max-width:500px){.p06-viewerbar {padding:.4rem}.p06-actions button {min-height:44px}.p06-viewerfoot {font-size:.8rem}.p06-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.p06-cardmeta {padding:.5rem;font-size:.83rem}.p06-card-actions {padding:.35rem}}
+@media(max-width:360px){.p06-grid {grid-template-columns:1fr 1fr}.p06-card-actions {flex-direction:column}.p06-card-actions button,.p06-card-actions a {width:100%;text-align:center}.p06-viewer {border-radius:0}}
+@media(prefers-reduced-motion:reduce){.p06-library *,.p06-viewer * {scroll-behavior:auto!important;animation:none!important}}
+
+.p06-thumb-container{display:grid;place-items:center;width:100%;height:100%}

@@ -23,6 +23,17 @@ def require_schema(c: sqlite3.Connection) -> None:
             raise MissingOwnerSchema('Verified owner columns are missing')
 
 
+def _has_asset_deletions(c):
+    return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_deletions'").fetchone() is not None
+
+
+def _not_deleted(c, alias: str):
+    if _has_asset_deletions(c):
+        return f''' AND NOT EXISTS (SELECT 1 FROM asset_deletions d WHERE d.asset_id={alias}.asset_id
+                 AND d.owner_user_id={alias}.owner_user_id)'''
+    return ''
+
+
 def job(c: sqlite3.Connection, uid: str, jid: str):
     return c.execute("""SELECT * FROM jobs WHERE id=? AND owner_user_id=?
         AND ownership_state='verified' AND hidden=0""", (jid,uid)).fetchone()
@@ -65,7 +76,7 @@ def asset(c,uid,aid):
     a=c.execute("""SELECT i.asset_id,i.storage_key,i.mime_type,i.width,i.height,
         i.size_bytes,i.created_at,'input' AS kind,NULL AS job_id
         FROM input_assets i WHERE i.asset_id=? AND i.owner_user_id=?
-        AND i.ownership_state='verified'""",(aid,uid)).fetchone()
+        AND i.ownership_state='verified'"""+_not_deleted(c,'i'),(aid,uid)).fetchone()
     if a:return dict(a)
     a=c.execute("""SELECT a.asset_id,a.storage_key,a.mime_type,a.width,a.height,
         a.size_bytes,a.created_at,'output' AS kind,a.job_id
@@ -73,7 +84,7 @@ def asset(c,uid,aid):
         WHERE a.asset_id=? AND a.owner_user_id=? AND a.ownership_state='verified'
         AND a.status='available' AND j.owner_user_id=?
         AND j.ownership_state='verified' AND j.hidden=0
-        AND (j.active_attempt_id IS NULL OR a.attempt_id=j.active_attempt_id)""",(aid,uid,uid)).fetchone()
+        AND (j.active_attempt_id IS NULL OR a.attempt_id=j.active_attempt_id)"""+_not_deleted(c,'a'),(aid,uid,uid)).fetchone()
     return dict(a) if a else None
 
 
@@ -84,7 +95,7 @@ def job_assets(c,uid,jid):
         WHERE j.id=? AND j.owner_user_id=? AND j.ownership_state='verified'
         AND j.hidden=0 AND a.owner_user_id=? AND a.ownership_state='verified'
         AND a.status='available' AND (j.active_attempt_id IS NULL OR a.attempt_id=j.active_attempt_id)
-        ORDER BY a.created_at DESC""",(jid,uid,uid)).fetchall()]
+        """+_not_deleted(c,'a')+" ORDER BY a.created_at DESC",(jid,uid,uid)).fetchall()]
 
 
 def assets_page(c,uid,limit=50):
@@ -92,13 +103,13 @@ def assets_page(c,uid,limit=50):
     inputs=c.execute("""SELECT i.asset_id,i.mime_type,i.width,i.height,
         i.created_at,'input' AS kind FROM input_assets i
         WHERE i.owner_user_id=? AND i.ownership_state='verified'
-        ORDER BY i.created_at DESC LIMIT ?""",(uid,limit)).fetchall()
+        """+_not_deleted(c,'i')+" ORDER BY i.created_at DESC LIMIT ?",(uid,limit)).fetchall()
     outputs=c.execute("""SELECT a.asset_id,a.mime_type,a.width,a.height,
         a.created_at,'output' AS kind FROM job_assets a JOIN jobs j ON j.id=a.job_id
         WHERE a.owner_user_id=? AND a.ownership_state='verified' AND a.status='available'
         AND j.owner_user_id=? AND j.ownership_state='verified' AND j.hidden=0
         AND (j.active_attempt_id IS NULL OR a.attempt_id=j.active_attempt_id)
-        ORDER BY a.created_at DESC LIMIT ?""",(uid,uid,limit)).fetchall()
+        """+_not_deleted(c,'a')+" ORDER BY a.created_at DESC LIMIT ?",(uid,uid,limit)).fetchall()
     return sorted([dict(x) for x in inputs]+[dict(x) for x in outputs],
                   key=lambda a:(a['created_at'],a['asset_id']),reverse=True)[:limit]
 
