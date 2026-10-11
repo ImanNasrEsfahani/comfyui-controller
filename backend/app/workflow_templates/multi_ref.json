@@ -1,0 +1,197 @@
+{
+  "intent": "multi_ref",
+  "nodes": [
+    {
+      "id": "model",
+      "kind": "checkpoint"
+    },
+    {
+      "id": "pos",
+      "kind": "prompt"
+    },
+    {
+      "id": "neg",
+      "kind": "prompt"
+    },
+    {
+      "id": "sampler",
+      "kind": "sampler"
+    },
+    {
+      "id": "decode",
+      "kind": "decode"
+    },
+    {
+      "id": "result",
+      "kind": "image_output"
+    },
+    {
+      "id": "src",
+      "kind": "image_input"
+    },
+    {
+      "id": "encoded",
+      "kind": "encode"
+    },
+    {
+      "id": "pose",
+      "kind": "image_input"
+    },
+    {
+      "id": "multiref",
+      "kind": "multi_reference"
+    }
+  ],
+  "edges": [
+    {
+      "from": "model",
+      "out": "clip",
+      "to": "pos",
+      "in": "clip"
+    },
+    {
+      "from": "model",
+      "out": "clip",
+      "to": "neg",
+      "in": "clip"
+    },
+    {
+      "from": "model",
+      "out": "model",
+      "to": "sampler",
+      "in": "model"
+    },
+    {
+      "from": "neg",
+      "out": "conditioning",
+      "to": "sampler",
+      "in": "negative"
+    },
+    {
+      "from": "sampler",
+      "out": "latent",
+      "to": "decode",
+      "in": "samples"
+    },
+    {
+      "from": "model",
+      "out": "vae",
+      "to": "decode",
+      "in": "vae"
+    },
+    {
+      "from": "decode",
+      "out": "image",
+      "to": "result",
+      "in": "images"
+    },
+    {
+      "from": "src",
+      "out": "image",
+      "to": "encoded",
+      "in": "pixels"
+    },
+    {
+      "from": "model",
+      "out": "vae",
+      "to": "encoded",
+      "in": "vae"
+    },
+    {
+      "from": "encoded",
+      "out": "latent",
+      "to": "sampler",
+      "in": "latent_image"
+    },
+    {
+      "from": "src",
+      "out": "image",
+      "to": "multiref",
+      "in": "identity"
+    },
+    {
+      "from": "pose",
+      "out": "image",
+      "to": "multiref",
+      "in": "clothing_pose"
+    },
+    {
+      "from": "multiref",
+      "out": "conditioning",
+      "to": "sampler",
+      "in": "positive"
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "type": "text",
+      "role": "instruction",
+      "node": "pos",
+      "port": "text",
+      "required": true
+    },
+    {
+      "key": "negative",
+      "type": "text",
+      "role": "negative",
+      "node": "neg",
+      "port": "text",
+      "required": true
+    },
+    {
+      "key": "seed",
+      "type": "integer",
+      "role": "seed",
+      "node": "sampler",
+      "port": "seed",
+      "required": true
+    },
+    {
+      "key": "steps",
+      "type": "integer",
+      "role": "steps",
+      "node": "sampler",
+      "port": "steps",
+      "required": true
+    },
+    {
+      "key": "cfg",
+      "type": "number",
+      "role": "cfg",
+      "node": "sampler",
+      "port": "cfg",
+      "required": true
+    },
+    {
+      "key": "source_image",
+      "type": "image",
+      "role": "identity",
+      "node": "src",
+      "port": "image",
+      "required": true
+    },
+    {
+      "key": "pose_image",
+      "type": "image",
+      "role": "clothing_pose",
+      "node": "pose",
+      "port": "image",
+      "required": true
+    },
+    {
+      "key": "instruction",
+      "type": "text",
+      "role": "edit",
+      "node": "multiref",
+      "port": "instruction",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "node": "result",
+      "media_type": "image"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+test_anonymous_denied (test_phase09_api.APITest.test_anonymous_denied) ... ok
+test_create_validate_compile_and_replay (test_phase09_api.APITest.test_create_validate_compile_and_replay) ... ok
+test_cross_user_asset_is_denied (test_phase09_api.APITest.test_cross_user_asset_is_denied) ... ok
+test_csrf_required (test_phase09_api.APITest.test_csrf_required) ... ok
+test_draft_clone_preserves_prior_hash (test_phase09_api.APITest.test_draft_clone_preserves_prior_hash) ... ok
+test_feature_gate (test_phase09_api.APITest.test_feature_gate) ... ok
+test_no_cross_user_request_key (test_phase09_api.APITest.test_no_cross_user_request_key) ... ok
+test_no_direct_gpu_job_api (test_phase09_api.APITest.test_no_direct_gpu_job_api) ... ok
+test_no_fake_compatibility (test_phase09_api.APITest.test_no_fake_compatibility) ... ok
+test_owner_isolation (test_phase09_api.APITest.test_owner_isolation) ... ok
+test_publish_blocked_by_default (test_phase09_api.APITest.test_publish_blocked_by_default) ... ok
+test_sql_immutability_snapshot (test_phase09_api.APITest.test_sql_immutability_snapshot) ... ok
+test_synthetic_metadata_publish_immutable (test_phase09_api.APITest.test_synthetic_metadata_publish_immutable) ... ok
+test_template_endpoint_is_structurally_real_and_nonrunning (test_phase09_api.APITest.test_template_endpoint_is_structurally_real_and_nonrunning) ... ok
+test_validate_unsafe_node_before_writing (test_phase09_api.APITest.test_validate_unsafe_node_before_writing) ... ok
+test_asset_cross_user (test_phase09_compiler.GoldenTests.test_asset_cross_user) ... ok
+test_bad_asset_url (test_phase09_compiler.GoldenTests.test_bad_asset_url) ... ok
+test_cycle (test_phase09_compiler.GoldenTests.test_cycle) ... ok
+test_deterministic_hash_different_latest_params (test_phase09_compiler.GoldenTests.test_deterministic_hash_different_latest_params) ... ok
+test_duplicate_port (test_phase09_compiler.GoldenTests.test_duplicate_port) ... ok
+test_four_golden (test_phase09_compiler.GoldenTests.test_four_golden) ... ok
+test_identity_pose_not_swapped (test_phase09_compiler.GoldenTests.test_identity_pose_not_swapped) ... ok
+test_img2img_source_cannot_be_unbound (test_phase09_compiler.GoldenTests.test_img2img_source_cannot_be_unbound) ... ok
+test_invalid_port (test_phase09_compiler.GoldenTests.test_invalid_port) ... ok
+test_malformed_nested_types_are_422_not_500 (test_phase09_compiler.GoldenTests.test_malformed_nested_types_are_422_not_500) ... ok
+test_missing_required_port (test_phase09_compiler.GoldenTests.test_missing_required_port) ... ok
+test_multi_ref_role_binding_must_match_wire (test_phase09_compiler.GoldenTests.test_multi_ref_role_binding_must_match_wire) ... ok
+test_no_authorizer (test_phase09_compiler.GoldenTests.test_no_authorizer) ... ok
+test_no_extra_param (test_phase09_compiler.GoldenTests.test_no_extra_param) ... ok
+test_no_float_seed (test_phase09_compiler.GoldenTests.test_no_float_seed) ... ok
+test_reject_overflow_seed (test_phase09_compiler.GoldenTests.test_reject_overflow_seed) ... ok
+test_size_cap (test_phase09_compiler.GoldenTests.test_size_cap) ... ok
+test_strict_graph_keys (test_phase09_compiler.GoldenTests.test_strict_graph_keys) ... ok
+test_type_mismatch (test_phase09_compiler.GoldenTests.test_type_mismatch) ... ok
+test_unavailable_inpaint_refuses (test_phase09_compiler.GoldenTests.test_unavailable_inpaint_refuses) ... ok
+test_unknown_class_type_key (test_phase09_compiler.GoldenTests.test_unknown_class_type_key) ... ok
+test_unknown_node (test_phase09_compiler.GoldenTests.test_unknown_node) ... ok
+test_wrong_intent_cannot_fake_multiref (test_phase09_compiler.GoldenTests.test_wrong_intent_cannot_fake_multiref) ... ok
+test_commit_is_pinned (test_phase09_install.Installation.test_commit_is_pinned) ... ok
+test_main_transform_guards_once (test_phase09_install.Installation.test_main_transform_guards_once) ... ok
+test_reject_bad_anchor (test_phase09_install.Installation.test_reject_bad_anchor) ... ok
+test_replacement_hashes_match (test_phase09_install.Installation.test_replacement_hashes_match) ... ok
+test_wrong_checkout_refused (test_phase09_install.Installation.test_wrong_checkout_refused) ... ok
+test_bad_copy_target_refused (test_phase09_migration.Migration.test_bad_copy_target_refused) ... ok
+test_copy_preserves_original (test_phase09_migration.Migration.test_copy_preserves_original) ... ok
+test_idempotent_and_fk (test_phase09_migration.Migration.test_idempotent_and_fk) ... ok
+test_missing_prerequisite_rollback (test_phase09_migration.Migration.test_missing_prerequisite_rollback) ... ok
+
+----------------------------------------------------------------------
+Ran 47 tests in 0.694s
+
+OK

@@ -1,0 +1,71 @@
+{
+  "intent": "image2video",
+  "nodes": [
+    {
+      "id": "video",
+      "kind": "video_generation"
+    },
+    {
+      "id": "final",
+      "kind": "video_output"
+    },
+    {
+      "id": "start",
+      "kind": "image_input"
+    }
+  ],
+  "edges": [
+    {
+      "from": "video",
+      "out": "frames",
+      "to": "final",
+      "in": "frames"
+    },
+    {
+      "from": "start",
+      "out": "image",
+      "to": "video",
+      "in": "start_frame"
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "type": "text",
+      "role": "instruction",
+      "node": "video",
+      "port": "prompt",
+      "required": true
+    },
+    {
+      "key": "seconds",
+      "type": "integer",
+      "role": "duration",
+      "node": "video",
+      "port": "seconds",
+      "required": true
+    },
+    {
+      "key": "fps",
+      "type": "integer",
+      "role": "fps",
+      "node": "video",
+      "port": "fps",
+      "required": true
+    },
+    {
+      "key": "start_frame",
+      "type": "image",
+      "role": "start_frame",
+      "node": "start",
+      "port": "image",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "node": "final",
+      "media_type": "video"
+    }
+  ]
+}

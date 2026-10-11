@@ -1,0 +1,70 @@
+TAP version 13
+# Subtest: Allowlisted endpoints only
+ok 1 - Allowlisted endpoints only
+  ---
+  duration_ms: 2.044701
+  type: 'test'
+  ...
+# Subtest: Safe GET cookie scope, no-store
+ok 2 - Safe GET cookie scope, no-store
+  ---
+  duration_ms: 0.422856
+  type: 'test'
+  ...
+# Subtest: POST CSRF and JSON
+ok 3 - POST CSRF and JSON
+  ---
+  duration_ms: 0.242701
+  type: 'test'
+  ...
+# Subtest: No raw server detail exposed for 403
+ok 4 - No raw server detail exposed for 403
+  ---
+  duration_ms: 0.206089
+  type: 'test'
+  ...
+# Subtest: Server field_path only on structured detail, never raw prompt
+ok 5 - Server field_path only on structured detail, never raw prompt
+  ---
+  duration_ms: 0.180741
+  type: 'test'
+  ...
+# Subtest: Only available fields serialized in safePreview
+ok 6 - Only available fields serialized in safePreview
+  ---
+  duration_ms: 0.785129
+  type: 'test'
+  ...
+# Subtest: Create and versions routes installed
+ok 7 - Create and versions routes installed
+  ---
+  duration_ms: 0.431041
+  type: 'test'
+  ...
+# Subtest: ReturnTo restricted to user route with ID
+ok 8 - ReturnTo restricted to user route with ID
+  ---
+  duration_ms: 0.166343
+  type: 'test'
+  ...
+# Subtest: No browser internal Worker/GPU call in studio
+ok 9 - No browser internal Worker/GPU call in studio
+  ---
+  duration_ms: 0.395614
+  type: 'test'
+  ...
+# Subtest: Source syntax all modified files
+ok 10 - Source syntax all modified files
+  ---
+  duration_ms: 294.707258
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 393.549696

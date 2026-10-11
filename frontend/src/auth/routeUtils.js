@@ -1,6 +1,6 @@
 /** Phase04: strict same-origin path routing; no external returnTo destinations. */
 export const PUBLIC_ROUTES = Object.freeze(['/login', '/register', '/verify-email', '/forgot-password', '/reset-password', '/auth/2fa']);
-export const USER_ROUTES = Object.freeze(['/dashboard', '/create/image', '/edit/image', '/jobs', '/library', '/tools', '/presets', '/account/profile', '/account/security', '/account/preferences', '/account/data']);
+export const USER_ROUTES = Object.freeze(['/dashboard', '/create/image', '/edit/image', '/jobs', '/library', '/tools', '/presets', '/workflows', '/workflows/new', '/account/profile', '/account/security', '/account/preferences', '/account/data']);
 export const ADMIN_ROUTES = Object.freeze(['/admin', '/admin/infrastructure', '/admin/deployment-profiles', '/admin/models', '/admin/worker-images', '/admin/users', '/admin/audit-logs']);
 
 export function safeReturnTo(input, fallback = '/dashboard') {
@@ -15,7 +15,7 @@ export function safeReturnTo(input, fallback = '/dashboard') {
 }
 
 export function isUserPath(path) {
-  return /^\/models\/[A-Za-z0-9_-]{1,96}$/.test(path) || USER_ROUTES.includes(path) || /^\/jobs\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/library\/[A-Za-z0-9_-]{1,96}$/.test(path);
+  return /^\/models\/[A-Za-z0-9_-]{1,96}$/.test(path) || USER_ROUTES.includes(path) || /^\/jobs\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/library\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/workflows\/[A-Za-z0-9_-]{1,96}\/versions$/.test(path);
 }
 export function routeFor(path) {
   const normalized = (typeof path === 'string' ? path.replace(/\/+$/, '') || '/' : '/');

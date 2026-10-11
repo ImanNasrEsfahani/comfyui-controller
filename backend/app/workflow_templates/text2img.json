@@ -1,0 +1,153 @@
+{
+  "intent": "text2img",
+  "nodes": [
+    {
+      "id": "model",
+      "kind": "checkpoint"
+    },
+    {
+      "id": "pos",
+      "kind": "prompt"
+    },
+    {
+      "id": "neg",
+      "kind": "prompt"
+    },
+    {
+      "id": "sampler",
+      "kind": "sampler"
+    },
+    {
+      "id": "decode",
+      "kind": "decode"
+    },
+    {
+      "id": "result",
+      "kind": "image_output"
+    },
+    {
+      "id": "latent",
+      "kind": "latent"
+    }
+  ],
+  "edges": [
+    {
+      "from": "model",
+      "out": "clip",
+      "to": "pos",
+      "in": "clip"
+    },
+    {
+      "from": "model",
+      "out": "clip",
+      "to": "neg",
+      "in": "clip"
+    },
+    {
+      "from": "model",
+      "out": "model",
+      "to": "sampler",
+      "in": "model"
+    },
+    {
+      "from": "pos",
+      "out": "conditioning",
+      "to": "sampler",
+      "in": "positive"
+    },
+    {
+      "from": "neg",
+      "out": "conditioning",
+      "to": "sampler",
+      "in": "negative"
+    },
+    {
+      "from": "sampler",
+      "out": "latent",
+      "to": "decode",
+      "in": "samples"
+    },
+    {
+      "from": "model",
+      "out": "vae",
+      "to": "decode",
+      "in": "vae"
+    },
+    {
+      "from": "decode",
+      "out": "image",
+      "to": "result",
+      "in": "images"
+    },
+    {
+      "from": "latent",
+      "out": "latent",
+      "to": "sampler",
+      "in": "latent_image"
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "type": "text",
+      "role": "instruction",
+      "node": "pos",
+      "port": "text",
+      "required": true
+    },
+    {
+      "key": "negative",
+      "type": "text",
+      "role": "negative",
+      "node": "neg",
+      "port": "text",
+      "required": true
+    },
+    {
+      "key": "seed",
+      "type": "integer",
+      "role": "seed",
+      "node": "sampler",
+      "port": "seed",
+      "required": true
+    },
+    {
+      "key": "steps",
+      "type": "integer",
+      "role": "steps",
+      "node": "sampler",
+      "port": "steps",
+      "required": true
+    },
+    {
+      "key": "cfg",
+      "type": "number",
+      "role": "cfg",
+      "node": "sampler",
+      "port": "cfg",
+      "required": true
+    },
+    {
+      "key": "width",
+      "type": "integer",
+      "role": "width",
+      "node": "latent",
+      "port": "width",
+      "required": true
+    },
+    {
+      "key": "height",
+      "type": "integer",
+      "role": "height",
+      "node": "latent",
+      "port": "height",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "node": "result",
+      "media_type": "image"
+    }
+  ]
+}

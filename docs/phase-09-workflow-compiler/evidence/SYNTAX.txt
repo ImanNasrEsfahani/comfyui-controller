@@ -1,0 +1,5 @@
+Python compileall: PASS
+Frontend JSX/JS syntax: PASS, five files via installed TypeScript parser (Node test #10)
+Full Vite build: NOT RUN
+Real Browser/mobile 360px: NOT RUN
+Worker/GPU/Salad/R2: NOT RUN

@@ -1,0 +1,53 @@
+{
+  "intent": "text2video",
+  "nodes": [
+    {
+      "id": "video",
+      "kind": "video_generation"
+    },
+    {
+      "id": "final",
+      "kind": "video_output"
+    }
+  ],
+  "edges": [
+    {
+      "from": "video",
+      "out": "frames",
+      "to": "final",
+      "in": "frames"
+    }
+  ],
+  "inputs": [
+    {
+      "key": "prompt",
+      "type": "text",
+      "role": "instruction",
+      "node": "video",
+      "port": "prompt",
+      "required": true
+    },
+    {
+      "key": "seconds",
+      "type": "integer",
+      "role": "duration",
+      "node": "video",
+      "port": "seconds",
+      "required": true
+    },
+    {
+      "key": "fps",
+      "type": "integer",
+      "role": "fps",
+      "node": "video",
+      "port": "fps",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "node": "final",
+      "media_type": "video"
+    }
+  ]
+}

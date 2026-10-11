@@ -11,6 +11,7 @@ import {PrivateLibrary,PrivateAssetDetail,ReferenceDraftPanel} from '../pages/li
 import {Phase06JobDetails} from '../pages/library/Phase06Jobs.jsx';
 import {ParameterStudio,PresetsPage} from '../pages/parameters/ParameterPages.jsx';
 import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentProfiles} from '../pages/registry/RegistryPages.jsx';
+import {WorkflowStudio,WorkflowList,WorkflowVersions} from '../pages/workflows/WorkflowPages.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -48,7 +49,10 @@ function Page(){
     return <AdminLayout title={adminTitle}>{adminNode}</AdminLayout>;
   }
   let title='داشبورد',node=<PersonalDashboard/>;
-  if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
+  if(route.path==='/workflows/new'){title='Workflow Studio';node=<WorkflowStudio/>;}
+  else if(route.path==='/workflows'){title='Workflowهای من';node=<WorkflowList/>;}
+  else if(route.path.startsWith('/workflows/')){title='نسخه‌های Workflow';node=<WorkflowVersions id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
   else if(route.path.startsWith('/models/')){title='مدل';node=<ModelDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/presets'){title='Presetهای من';node=<PresetsPage/>;}
   else if(route.path==='/jobs'){title='کارهای من';node=<JobsPage/>;}
