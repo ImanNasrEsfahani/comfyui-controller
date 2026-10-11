@@ -1,0 +1,10 @@
+NODE: prior Phase10 graph-only pure tests from Phase10 delivered ZIP:
+node --test tests/test_phase10_graph.mjs
+13 tests, 13 pass, 0 fail.
+
+Full prior ZIP frontend client tests attempted but import frontend/src/auth/api.js missing in partial ZIP fixture:
+node --test tests/test_phase10_*.mjs
+13 tests pass, 1 module-load failure ERR_MODULE_NOT_FOUND; NOT a complete GitHub main checkout.
+
+Full current repository tests, Vite build, source-pinned composite installer against a complete checkout:
+NOT RUN; Python container cannot resolve github.com for git clone. GitHub connector read-only checked HEAD and source blob hashes separately.

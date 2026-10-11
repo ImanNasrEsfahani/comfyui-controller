@@ -1,0 +1,13 @@
+# Private Worker v11 interface — NOT PUBLIC USER API
+
+`POST /api/v2/worker/hello` (when `WORKER_V11_CAPABILITIES_ENABLED=true`): requires `X-Worker-Token: <service credential>` and strict `{worker_id,generation,worker_image_digest,deployment_revision_id,comfyui_api_ready,model_versions:[{id,sha256,verified}],lora_versions:[...],node_inventory:[...]}`. No browser Cookie or `APP_INTERNAL_TOKEN` authorization. Stores only observational metadata; returns `compatibility=unverified`, `model_ready=unknown`, `dispatch_enabled=false`. It does NOT mark an image/model as actually proven loadable/inference-ready. Metadata is treated as claimed by the Worker, not an independent GPU test.
+
+`POST /api/v2/worker/claim`: **503 by design** pending Phase03 verified atomic user Job persistence and Phase07 model/image/profile compatibility + stage09/10 ComfyUI graph test. This package cannot safely connect it to the legacy queue.
+
+`worker_v11_contract.sign` returns `{payload,signature}` where `payload.version=11` and includes job_id, attempt_id, SHA256 of active lease token, immutable `worker_image_digest=ghcr.io/...@sha256:...`, model_version_id, workflow_version_id, deployment_revision_id, compiled_graph and its SHA256, bounded verified owner input binding list, enabled/ready LoRA manifest, output prefix `outputs/{job_id}/{attempt_id}/`, issue/expiry timestamps. A dedicated key at least 32 bytes is required. The signing key, actual lease token, Worker API credentials, signed R2 URLs and private storage paths must never appear in browser APIs or audit logs.
+
+Verifier refuses HMAC or Lease mismatch, wrong digest, stale expiry, unsigned claims, unapproved class_type, URL/shell-like input strings, unbound input slot, incompatible or not-ready LoRA, duplicate/disabled LoRA, model readiness absent and output-prefix mismatch. Graph type/edge correctness still depends on a **test-confirmed Stage09 compiler/approved worker node inventory**, not on this envelope alone.
+
+The Worker `v11_execution.verify_claim` is pure offline execution preparation: it accepts only an already valid signed claim and controller-staged authorized asset manifest. It returns a trusted ComfyUI `/prompt` request but does not itself enqueue or prove inference success. `WORKER_V11_EXECUTION_ENABLED` defaults false; when true without an appropriate new-claim backend, all legacy unsigned jobs fail closed rather than being executed.
+
+Output acceptance requires `worker_v11_media.verify_output_objects` actual bytes decoding/probing, then `worker_v11_state.finish` current attempt/underlying controller lease match and all required outputs verified. These building blocks are **not** wired to the old completion endpoint yet.
