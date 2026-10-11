@@ -13,6 +13,7 @@ import {ParameterStudio,PresetsPage} from '../pages/parameters/ParameterPages.js
 import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentProfiles} from '../pages/registry/RegistryPages.jsx';
 import {WorkflowStudio,WorkflowList,WorkflowVersions} from '../pages/workflows/WorkflowPages.jsx';
 import {StudioEditor,StudioVersions} from '../pages/workflows/StudioV2.jsx';
+import {UsagePage,InfrastructurePage} from '../pages/scheduling/SchedulingPages.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -44,6 +45,7 @@ function Page(){
     if(route.path==='/admin/users'){adminTitle='کاربران';adminNode=<AdminUsers/>;}
     else if(route.path.startsWith('/admin/users/')){adminTitle='جزئیات کاربر';adminNode=<AdminUserDetail id={route.path.split('/')[3]}/>;}
     else if(route.path==='/admin/audit-logs'){adminTitle='لاگ حسابرسی';adminNode=<AdminAudit/>;}
+    else if(route.path==='/admin/infrastructure'){adminTitle='زیرساخت GPU';adminNode=<InfrastructurePage/>;}
     else if(route.path==='/admin/models'){adminTitle='مدل‌ها';adminNode=<AdminModels/>;}
     else if(route.path==='/admin/worker-images'){adminTitle='Worker Images';adminNode=<AdminWorkerImages/>;}
     else if(route.path==='/admin/deployment-profiles'){adminTitle='Deployment Profiles';adminNode=<AdminDeploymentProfiles/>;}
@@ -55,6 +57,7 @@ function Page(){
   else if(route.path==='/workflows'){title='Workflowهای من';node=<WorkflowList/>;}
   else if(/^\/workflows\/[^/]+\/edit\/[^/]+$/.test(route.path)){title='ویرایش Workflow';node=STUDIO_ENABLED?<StudioEditor definitionId={route.path.split('/')[2]} versionId={route.path.split('/')[4]}/>:<UnsupportedPage title="Studio Graph UI غیرفعال است"/>;}
   else if(route.path.startsWith('/workflows/')){title='نسخه‌های Workflow';node=STUDIO_ENABLED?<StudioVersions id={route.path.split('/')[2]}/>:<WorkflowVersions id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/usage'){title='مصرف و سهمیه';node=<UsagePage/>;}
   else if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
   else if(route.path.startsWith('/models/')){title='مدل';node=<ModelDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/presets'){title='Presetهای من';node=<PresetsPage/>;}

@@ -1,0 +1,7 @@
+# Phase12 handoff → next stage
+
+**PARTIAL / BLOCKED**, pinned GitHub main `cc9cb4d6980f7d1300afc14e93b0291e36386be8`. New scheduler is only a simulated scheduling/allocator planning engine; no provider commands or real worker claims. Local SQLite and HTTP tests can pass while live Dispatch remains intentionally disabled. Existing Direct Queue and Direct Scheduler were not modified, preserving old behavior and existing risks. Feature UI disabled by default.
+
+Phase11 HANDOFF remains blocker: its new Claim returns 503, signed v11 envelope not routed; Stage03 Generate/Retry unsafe; Stage07 signature/node image compatibility and Vault incomplete; Stage09/10 effective ComfyUI graph attestation incomplete. Requested GLOBAL-RULES.txt, approved DECISIONS.md and live deployment context absent. No staging GPU or provider confirmation. Numerical policy test values do NOT constitute owner-approved quota/price decisions.
+
+Stage12 subsequent work required: selected profile/instance-to-Worker binding with trusted authenticated capability inventory; atomic owner-quota + Job acceptance + allocation/lease; real release on terminal/late callbacks and startup reconciliation, fairness under SQLite WAL contention, profile-safe provider serialized operation with confirmed start/stopped and cross-mode drain, Invoice-source accounting and dedicated session policy approval. Dedicated is not implemented. Migration is copy-only. The composite installer for `main.py` remains untested in a complete checkout and must not be treated as a staging ready release.

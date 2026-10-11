@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: Reject non-allowlisted provider endpoint
+ok 1 - Reject non-allowlisted provider endpoint
+  ---
+  duration_ms: 1.16238
+  type: 'test'
+  ...
+# Subtest: GET uses browser scoped credentials and no-store
+ok 2 - GET uses browser scoped credentials and no-store
+  ---
+  duration_ms: 0.247843
+  type: 'test'
+  ...
+# Subtest: Scale request keeps CSRF and preview acknowledgement
+ok 3 - Scale request keeps CSRF and preview acknowledgement
+  ---
+  duration_ms: 0.263677
+  type: 'test'
+  ...
+# Subtest: Denies arbitrary post path
+ok 4 - Denies arbitrary post path
+  ---
+  duration_ms: 0.13969
+  type: 'test'
+  ...
+# Subtest: Maps 401/403/409/422/503 safely
+ok 5 - Maps 401/403/409/422/503 safely
+  ---
+  duration_ms: 0.41826
+  type: 'test'
+  ...
+# Subtest: No cache or secret parameters in URL for private read
+ok 6 - No cache or secret parameters in URL for private read
+  ---
+  duration_ms: 0.266952
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 66.295978

@@ -1,0 +1,12 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________________ test_scheduler_module_present _________________________
+
+    def test_scheduler_module_present():
+>       from backend.app import scheduler_v12
+E       ImportError: cannot import name 'scheduler_v12' from 'backend.app' (unknown location)
+
+tests/test_phase12_core.py:2: ImportError
+=========================== short test summary info ============================
+FAILED tests/test_phase12_core.py::test_scheduler_module_present - ImportError: cannot import name 'scheduler_v12' from 'backend.app' (unknown location)
+1 failed in 0.05s

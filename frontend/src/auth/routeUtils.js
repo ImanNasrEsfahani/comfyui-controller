@@ -1,6 +1,6 @@
 /** Phase04: strict same-origin path routing; no external returnTo destinations. */
 export const PUBLIC_ROUTES = Object.freeze(['/login', '/register', '/verify-email', '/forgot-password', '/reset-password', '/auth/2fa']);
-export const USER_ROUTES = Object.freeze(['/dashboard', '/create/image', '/edit/image', '/jobs', '/library', '/tools', '/presets', '/workflows', '/workflows/new', '/account/profile', '/account/security', '/account/preferences', '/account/data']);
+export const USER_ROUTES = Object.freeze(['/dashboard', '/create/image', '/edit/image', '/jobs', '/library', '/tools', '/presets', '/usage', '/workflows', '/workflows/new', '/account/profile', '/account/security', '/account/preferences', '/account/data']);
 export const ADMIN_ROUTES = Object.freeze(['/admin', '/admin/infrastructure', '/admin/deployment-profiles', '/admin/models', '/admin/worker-images', '/admin/users', '/admin/audit-logs']);
 
 export function safeReturnTo(input, fallback = '/dashboard') {
