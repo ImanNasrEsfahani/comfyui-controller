@@ -1,0 +1,3 @@
+Python 3.13.5; Node 22.16.0; FFmpeg 7.1.5; FFprobe 7.1.5
+GitHub main pinned: a5a22d616558092e3e81504f9ed5d7061f5e0698
+Real GPU/Salad/R2/production DB: NOT RUN / NOT ACCESSED

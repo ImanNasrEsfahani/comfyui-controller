@@ -1,0 +1,7 @@
+# Phase13 handoff — PARTIAL/BLOCKED
+
+Read-only source commit `a5a22d616558092e3e81504f9ed5d7061f5e0698`; rechecked before package. Stage13 adds local real video file probe/poster/proxy, standalone streaming R2 verifier, owner-bound metadata/UI and intentionally locked generation. No provider change or Docker rebuild.
+
+Phase11 new Claim is intentionally 503. Phase12 scheduler planning is not wired to real Salad commands or Worker Claim; Phase09 semantic Video nodes map to unverified placeholders, no approved video model/profile evidence. `GLOBAL-RULES.txt` and `DECISIONS.md` were not supplied; no live GPU/cost permission, staged schema baseline or production deploy context. Stage13 does **not** meet AT-13-01 or full media processing exit gate.
+
+Next responsible implementer: choose and measure one approved model/license/image/profile, validate VRAM and node inventory; implement executable video graph, owner-bound atomic submit+lease/worker, real uploaded output with HEAD+stream+ffprobe validated before DB success, postprocess task runner idempotency and poster/proxy bookkeeping; use signed authenticated service to bind R2 to owned job and preserve original; cancellation/timeout/scale-down fencing; private large-object HTTP range streaming rather than in-browser full Blob. Rehearse staging migration/rollback and real browser QA. Do not change old legacy path blindly or imply static compatibility proves inference.

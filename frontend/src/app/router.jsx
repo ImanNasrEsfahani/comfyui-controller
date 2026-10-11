@@ -14,6 +14,7 @@ import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentP
 import {WorkflowStudio,WorkflowList,WorkflowVersions} from '../pages/workflows/WorkflowPages.jsx';
 import {StudioEditor,StudioVersions} from '../pages/workflows/StudioV2.jsx';
 import {UsagePage,InfrastructurePage} from '../pages/scheduling/SchedulingPages.jsx';
+import {VideoCreatePage,VideoEditPage} from '../pages/video/VideoPages.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -57,6 +58,8 @@ function Page(){
   else if(route.path==='/workflows'){title='Workflowهای من';node=<WorkflowList/>;}
   else if(/^\/workflows\/[^/]+\/edit\/[^/]+$/.test(route.path)){title='ویرایش Workflow';node=STUDIO_ENABLED?<StudioEditor definitionId={route.path.split('/')[2]} versionId={route.path.split('/')[4]}/>:<UnsupportedPage title="Studio Graph UI غیرفعال است"/>;}
   else if(route.path.startsWith('/workflows/')){title='نسخه‌های Workflow';node=STUDIO_ENABLED?<StudioVersions id={route.path.split('/')[2]}/>:<WorkflowVersions id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/create/video'){title='ساخت ویدئو';node=<VideoCreatePage/>;}
+  else if(route.path==='/edit/video'){title='ویرایش ویدئو';node=<VideoEditPage/>;}
   else if(route.path==='/usage'){title='مصرف و سهمیه';node=<UsagePage/>;}
   else if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
   else if(route.path.startsWith('/models/')){title='مدل';node=<ModelDetails id={route.path.split('/')[2]}/>;}

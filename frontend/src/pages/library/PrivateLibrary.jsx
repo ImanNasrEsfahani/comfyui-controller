@@ -1,3 +1,4 @@
+import {PrivateVideoPlayer} from '../video/VideoPages.jsx';
 import React,{useCallback,useEffect,useRef,useState} from 'react';
 import {useAuth} from '../../auth/session.jsx';
 import {AppLink} from '../../layouts/Layouts.jsx';
@@ -89,7 +90,7 @@ export function PrivateAssetDetail({id}){
   await mediaRequest(ownerClient,mediaPath(id),{method:'DELETE'});navigate('/library');
  }catch(e){setNote(e.message)}}
  return <section className="p06-library" dir="rtl"><AppLink to="/library">بازگشت به کتابخانه</AppLink><h1>جزئیات رسانه</h1>{state==='loading'&&<p role="status">در حال خواندن جزئیات خصوصی…</p>}{state==='error'&&<p role="alert">{error}</p>}
- {item&&<><div className="p06-detail"><strong>{item.kind==='output'?'خروجی':'ورودی'}</strong><p>نوع: {item.mime_type}</p><p>ابعاد: {item.width??'?'} × {item.height??'?'}</p><p>حجم: {item.size_bytes??'نامشخص'} بایت</p><p>ساخته شده: {formatted(item.created_at)}</p>
+ {item&&<><div className="p06-detail">{item.mime_type?.startsWith('video/')&&<PrivateVideoPlayer assetId={id}/>}<strong>{item.kind==='output'?'خروجی':'ورودی'}</strong><p>نوع: {item.mime_type}</p><p>ابعاد: {item.width??'?'} × {item.height??'?'}</p><p>حجم: {item.size_bytes??'نامشخص'} بایت</p><p>ساخته شده: {formatted(item.created_at)}</p>
   {item.job_id&&<AppLink to={`/jobs/${encodeURIComponent(item.job_id)}`}>Job مبدأ</AppLink>}
   <details><summary>اطلاعات فنی و روابط</summary><pre dir="ltr">{JSON.stringify({variants:item.variants,references:item.references},null,2)}</pre></details>
   <button type="button" onClick={()=>setViewer(true)}>نمایش تمام‌صفحه</button><button type="button" onClick={()=>void download()}>دانلود اصلی</button><button type="button" onClick={()=>void reuse()}>استفاده به‌عنوان مرجع</button><button type="button" onClick={()=>void remove()}>حذف از کتابخانه</button>{note&&<p role="status">{note}</p>}</div>

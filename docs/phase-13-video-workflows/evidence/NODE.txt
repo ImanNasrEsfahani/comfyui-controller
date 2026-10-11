@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: Private media endpoint accepts only opaque asset id
+ok 1 - Private media endpoint accepts only opaque asset id
+  ---
+  duration_ms: 1.085043
+  type: 'test'
+  ...
+# Subtest: No arbitrary user-provided API URL
+ok 2 - No arbitrary user-provided API URL
+  ---
+  duration_ms: 1.286507
+  type: 'test'
+  ...
+# Subtest: Cookie-only validated request with CSRF and no keys
+ok 3 - Cookie-only validated request with CSRF and no keys
+  ---
+  duration_ms: 0.338199
+  type: 'test'
+  ...
+# Subtest: Missing csrf user does not claim success
+ok 4 - Missing csrf user does not claim success
+  ---
+  duration_ms: 0.195365
+  type: 'test'
+  ...
+# Subtest: Private video downloaded as authenticated blob
+ok 5 - Private video downloaded as authenticated blob
+  ---
+  duration_ms: 0.290327
+  type: 'test'
+  ...
+# Subtest: No fake empty video success
+ok 6 - No fake empty video success
+  ---
+  duration_ms: 0.204928
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 61.931147

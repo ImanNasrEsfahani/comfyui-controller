@@ -1,0 +1,5 @@
+PASS frontend/src/app/router.jsx
+PASS frontend/src/auth/routeUtils.js
+PASS frontend/src/layouts/Layouts.jsx
+PASS frontend/src/pages/library/PrivateLibrary.jsx
+PASS frontend/src/pages/video/VideoPages.jsx
