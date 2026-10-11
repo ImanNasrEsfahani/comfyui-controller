@@ -1,0 +1,72 @@
+2026-10-11T01:24:38Z
+v22.16.0
+TAP version 13
+# Subtest: route table maps the six auth routes and legacy redirects
+ok 1 - route table maps the six auth routes and legacy redirects
+  ---
+  duration_ms: 1.999976
+  type: 'test'
+  ...
+# Subtest: returnTo strictly user-scoped and same-origin
+ok 2 - returnTo strictly user-scoped and same-origin
+  ---
+  duration_ms: 0.298881
+  type: 'test'
+  ...
+# Subtest: admin permission requires backend roles
+ok 3 - admin permission requires backend roles
+  ---
+  duration_ms: 0.141884
+  type: 'test'
+  ...
+# Subtest: masked email avoids displaying full local part
+ok 4 - masked email avoids displaying full local part
+  ---
+  duration_ms: 0.102956
+  type: 'test'
+  ...
+# Subtest: auth fetch stays on allowed API endpoints and cookie-only
+ok 5 - auth fetch stays on allowed API endpoints and cookie-only
+  ---
+  duration_ms: 0.607817
+  type: 'test'
+  ...
+# Subtest: errors do not expose server-private messages
+ok 6 - errors do not expose server-private messages
+  ---
+  duration_ms: 0.390388
+  type: 'test'
+  ...
+# Subtest: owner client sends cookie/CSRF but never admin token
+ok 7 - owner client sends cookie/CSRF but never admin token
+  ---
+  duration_ms: 0.846447
+  type: 'test'
+  ...
+# Subtest: invalidation rejects request from previously authenticated account
+ok 8 - invalidation rejects request from previously authenticated account
+  ---
+  duration_ms: 0.565032
+  type: 'test'
+  ...
+# Subtest: owner client blocks legacy provider controls
+ok 9 - owner client blocks legacy provider controls
+  ---
+  duration_ms: 1.052878
+  type: 'test'
+  ...
+# Subtest: owner client storage cleanup removes old draft keys without touching unrelated data
+ok 10 - owner client storage cleanup removes old draft keys without touching unrelated data
+  ---
+  duration_ms: 0.255455
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 60.935854

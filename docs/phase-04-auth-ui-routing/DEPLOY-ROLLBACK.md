@@ -1,0 +1,15 @@
+# Phase04 Staging installation, verification and rollback
+
+**Not authorized for production** until earlier security gates close. No new database migration in Phase04 itself.
+
+1. Make a fresh *disposable staging* checkout from latest `main`, record `git rev-parse HEAD`. Do not apply this ZIP to any other commit until reviewing differences. Required tested base: `d5e14c83a2fde42d88c5e1d07130f06d8daab51c`. Check the prior original `frontend/src/main.jsx` blob SHA: `4ecd9cfb14e62fca48ebd0ecd6d9784abf85a620` and `frontend/src/ownerClient.js`: `c95057e31eb7d9092c9403ec96e82655e967b3ac`.
+2. Keep backup of the old `frontend/src/main.jsx` and the entire deployed image digest before copying files. Extract this ZIP at repository root, preserving relative paths. Do not touch `.env` or real DB.
+3. First build with `VITE_AUTH_UI_ENABLED=false` (default); the original `App.jsx` must still load and existing Generate/Jobs regressions must PASS.
+4. In an independent staging environment after completing the Phase02/03 router installers and migrations **on an isolated SQLite copy**, enable `AUTH_ENABLED=true`, `OWNER_ISOLATION_ENABLED=true`, `AUTH_REGISTRATION_MODE=invite`, safe `AUTH_PUBLIC_ORIGIN` matching HTTPS host, verified `AUTH_CSRF_SECRET`, test SMTP. Set `VITE_AUTH_UI_ENABLED=true` **at build time**, for example copy `frontend/.env.phase04.example` to untracked `frontend/.env.production` and change the non-secret Boolean. Build again; runtime container env alone does not change compiled Vite code.
+5. Run `node --test tests/test_phase04_*.mjs`; then in the **complete checkout**: `npm --prefix frontend install --no-audit --no-fund`, `npm --prefix frontend run build`, existing repository JS/Python tests, then Playwright 360px/iOS-width, desktop RTL/LTR, keyboard/tab/focus, deep-link refresh `/jobs/:id`, `/account/security`, forged roles, real-cookie multi-tab login/logout and A/B authorization. The backend must be verified to register both Phase02 Auth and Phase03 Owner routers BEFORE legacy catch-all dynamic Job routes. Explicitly compare OpenAPI route table.
+6. Check Cloudflare cache headers, browser cookie Secure+HttpOnly+SameSite, API no-store, proxy origin; never put Worker or admin shared token in the user client or its variables.
+7. `Generate` and `Retry` remain deliberately disabled in new user UI until Phase03 fixes transactional owner/idempotency. Existing Legacy Admin remains accessible only with flag OFF in a single-operator trusted context. Do not rely on flag OFF as a multi-user security rollback.
+
+Rollback on staging: rebuild the previous frontend source/image with `VITE_AUTH_UI_ENABLED=false` and the previous `main.jsx` if appropriate; use existing image digest. No data schema is modified by this ZIP, so there is no Phase04 DB down-migration. Do not revert Phase01/02 DB on a live writer. If backend has been separately migrated, follow its independently tested backup/restore plan.
+
+**Never test with real users, public registration, real GPU paid actions or live R2 without separate authorization and security signoff.**
