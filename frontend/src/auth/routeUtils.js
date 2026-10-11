@@ -1,7 +1,7 @@
 /** Phase04: strict same-origin path routing; no external returnTo destinations. */
 export const PUBLIC_ROUTES = Object.freeze(['/login', '/register', '/verify-email', '/forgot-password', '/reset-password', '/auth/2fa']);
 export const USER_ROUTES = Object.freeze(['/dashboard', '/create/image', '/edit/image', '/jobs', '/library', '/tools', '/presets', '/account/profile', '/account/security', '/account/preferences', '/account/data']);
-export const ADMIN_ROUTES = Object.freeze(['/admin', '/admin/infrastructure', '/admin/deployment-profiles']);
+export const ADMIN_ROUTES = Object.freeze(['/admin', '/admin/infrastructure', '/admin/deployment-profiles', '/admin/users', '/admin/audit-logs']);
 
 export function safeReturnTo(input, fallback = '/dashboard') {
   if (typeof input !== 'string' || input.length > 1024 || !input.startsWith('/') || input.startsWith('//') || input.includes('\\') || /[\u0000-\u001f\u007f]/.test(input)) return fallback;
@@ -23,6 +23,7 @@ export function routeFor(path) {
   if (normalized === '/editor') return {scope:'redirect', to:'/create/image'};
   if (normalized === '/infrastructure') return {scope:'redirect', to:'/admin/infrastructure'};
   if (normalized === '/settings') return {scope:'redirect', to:'/admin/deployment-profiles'};
+  if (/^\/admin\/users\/[A-Za-z0-9_-]{1,96}$/.test(normalized)) return {scope:'admin', path:normalized};
   if (normalized === '/admin/jobs') return {scope:'admin', path:normalized};
   if (PUBLIC_ROUTES.includes(normalized)) return {scope:'public', path:normalized};
   if (isUserPath(normalized)) return {scope:'user', path:normalized};

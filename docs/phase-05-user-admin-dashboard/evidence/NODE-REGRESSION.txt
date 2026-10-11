@@ -1,0 +1,88 @@
+TAP version 13
+# Subtest: route table maps the six auth routes and legacy redirects
+ok 1 - route table maps the six auth routes and legacy redirects
+  ---
+  duration_ms: 1.946916
+  type: 'test'
+  ...
+# Subtest: returnTo strictly user-scoped and same-origin
+ok 2 - returnTo strictly user-scoped and same-origin
+  ---
+  duration_ms: 0.382517
+  type: 'test'
+  ...
+# Subtest: admin permission requires backend roles
+ok 3 - admin permission requires backend roles
+  ---
+  duration_ms: 0.13236
+  type: 'test'
+  ...
+# Subtest: masked email avoids displaying full local part
+ok 4 - masked email avoids displaying full local part
+  ---
+  duration_ms: 0.103276
+  type: 'test'
+  ...
+# Subtest: auth fetch stays on allowed API endpoints and cookie-only
+ok 5 - auth fetch stays on allowed API endpoints and cookie-only
+  ---
+  duration_ms: 0.632734
+  type: 'test'
+  ...
+# Subtest: errors do not expose server-private messages
+ok 6 - errors do not expose server-private messages
+  ---
+  duration_ms: 0.453334
+  type: 'test'
+  ...
+# Subtest: owner client sends cookie/CSRF but never admin token
+ok 7 - owner client sends cookie/CSRF but never admin token
+  ---
+  duration_ms: 1.062352
+  type: 'test'
+  ...
+# Subtest: invalidation rejects request from previously authenticated account
+ok 8 - invalidation rejects request from previously authenticated account
+  ---
+  duration_ms: 0.639575
+  type: 'test'
+  ...
+# Subtest: owner client blocks legacy provider controls
+ok 9 - owner client blocks legacy provider controls
+  ---
+  duration_ms: 0.199201
+  type: 'test'
+  ...
+# Subtest: owner client storage cleanup removes old draft keys without touching unrelated data
+ok 10 - owner client storage cleanup removes old draft keys without touching unrelated data
+  ---
+  duration_ms: 0.344158
+  type: 'test'
+  ...
+# Subtest: new user/account/admin paths have exact scope and safe deep links
+ok 11 - new user/account/admin paths have exact scope and safe deep links
+  ---
+  duration_ms: 0.929211
+  type: 'test'
+  ...
+# Subtest: account request is strictly cookie-based, no admin/worker token
+ok 12 - account request is strictly cookie-based, no admin/worker token
+  ---
+  duration_ms: 1.320161
+  type: 'test'
+  ...
+# Subtest: 403 and 503 become user-safe errors without credential echo
+ok 13 - 403 and 503 become user-safe errors without credential echo
+  ---
+  duration_ms: 0.401075
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 62.524448

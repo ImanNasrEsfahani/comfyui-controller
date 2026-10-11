@@ -1,0 +1,26 @@
+test_01_full_cycle_and_cookie (test_phase02_auth.Phase02HTTP.test_01_full_cycle_and_cookie) ... ok
+test_02_reset_revokes_all_and_is_one_time (test_phase02_auth.Phase02HTTP.test_02_reset_revokes_all_and_is_one_time) ... ok
+test_03_anti_enumeration_and_login_rate (test_phase02_auth.Phase02HTTP.test_03_anti_enumeration_and_login_rate) ... ok
+test_04_csrf_bad_origin_and_foreign_session (test_phase02_auth.Phase02HTTP.test_04_csrf_bad_origin_and_foreign_session) ... ok
+test_05_role_spoof_admin_does_not_work (test_phase02_auth.Phase02HTTP.test_05_role_spoof_admin_does_not_work) ... ok
+test_06_logout_all_and_session_list (test_phase02_auth.Phase02HTTP.test_06_logout_all_and_session_list) ... ok
+test_07_disabled_registration_and_unverified (test_phase02_auth.Phase02HTTP.test_07_disabled_registration_and_unverified) ... ok
+test_08_user_session_cannot_access_worker_or_admin (test_phase02_auth.Phase02HTTP.test_08_user_session_cannot_access_worker_or_admin) ... ok
+test_09_invite_policy_and_replay (test_phase02_auth.Phase02HTTP.test_09_invite_policy_and_replay) ... ok
+test_10_password_change_revokes_all (test_phase02_auth.Phase02HTTP.test_10_password_change_revokes_all) ... ok
+test_11_session_revoke_other_and_cross_owner (test_phase02_auth.Phase02HTTP.test_11_session_revoke_other_and_cross_owner) ... ok
+test_12_secure_disabled_migration_flag (test_phase02_auth.Phase02HTTP.test_12_secure_disabled_migration_flag) ... ok
+test_13_registration_race_atomic (test_phase02_auth.Phase02HTTP.test_13_registration_race_atomic) ... ok
+test_14_hashed_secret_storage_and_rehash (test_phase02_auth.Phase02HTTP.test_14_hashed_secret_storage_and_rehash) ... ok
+test_01_dashboard_sql_owner_and_aggregate_privacy (test_phase05_account.Phase05HTTP.test_01_dashboard_sql_owner_and_aggregate_privacy) ... ok
+test_02_preferences_across_two_clients_and_csrf (test_phase05_account.Phase05HTTP.test_02_preferences_across_two_clients_and_csrf) ... ok
+test_03_admin_suspend_revokes_and_audit_immutable (test_phase05_account.Phase05HTTP.test_03_admin_suspend_revokes_and_audit_immutable) ... ok
+test_04_roles_stepup_password_and_no_impersonation (test_phase05_account.Phase05HTTP.test_04_roles_stepup_password_and_no_impersonation) ... ok
+test_05_email_change_token_one_time_and_no_premature_change (test_phase05_account.Phase05HTTP.test_05_email_change_token_one_time_and_no_premature_change) ... ok
+test_06_user_data_requests_feature_gated (test_phase05_account.Phase05HTTP.test_06_user_data_requests_feature_gated) ... ok
+test_07_audit_admin_cursor_and_email_list_denied (test_phase05_account.Phase05HTTP.test_07_audit_admin_cursor_and_email_list_denied) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 9.015s
+
+OK

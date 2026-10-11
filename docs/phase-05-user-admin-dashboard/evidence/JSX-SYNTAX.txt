@@ -1,0 +1,4 @@
+frontend/src/pages/Phase05Pages.jsx: JSX parse diagnostic count 0
+frontend/src/pages/Phase05Admin.jsx: JSX parse diagnostic count 0
+frontend/src/app/router.jsx: JSX parse diagnostic count 0
+frontend/src/layouts/Layouts.jsx: JSX parse diagnostic count 0

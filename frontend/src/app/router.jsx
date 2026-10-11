@@ -4,7 +4,9 @@ import {routeFor,isAdmin,safeReturnTo} from '../auth/routeUtils.js';
 import {subscribeLocation,navigate} from './navigation.js';
 import {LoginPage,RegisterPage,VerifyPage,ForgotPage,ResetPage,TwoFactorPage} from '../auth/AuthPages.jsx';
 import {UserLayout,AdminLayout,AuthLayout,AppLink} from '../layouts/Layouts.jsx';
-import {Dashboard,JobsPage,JobDetails,LibraryPage,CreateImagePage,AccountSecurityPage,UnsupportedPage,AdminPage} from '../pages/UserPages.jsx';
+import {JobsPage,JobDetails,LibraryPage,CreateImagePage,AccountSecurityPage,UnsupportedPage} from '../pages/UserPages.jsx';
+import {PersonalDashboard,ProfilePage,PreferencesPage,DataPage,AccountSecurityExtras} from '../pages/Phase05Pages.jsx';
+import {AdminOverview,AdminUsers,AdminUserDetail,AdminAudit} from '../pages/Phase05Admin.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -30,13 +32,23 @@ function Page(){
     return <Redirect to={`/login?returnTo=${encodeURIComponent(returnTo)}`}/>;
   }
   if(route.scope==='admin'&&!isAdmin(session.user))return <UserLayout title="عدم دسترسی"><section className="p04-alert" role="alert"><h1>۴۰۳ — مجوز ندارید</h1><p>این بخش مخصوص مدیران است.</p><AppLink to="/dashboard">بازگشت</AppLink></section></UserLayout>;
-  if(route.scope==='admin')return <AdminLayout title="مدیریت"><AdminPage/></AdminLayout>;
-  let title='داشبورد',node=<Dashboard/>;
+  if(route.scope==='admin'){
+    let adminNode=<AdminOverview/>,adminTitle='مدیریت';
+    if(route.path==='/admin/users'){adminTitle='کاربران';adminNode=<AdminUsers/>;}
+    else if(route.path.startsWith('/admin/users/')){adminTitle='جزئیات کاربر';adminNode=<AdminUserDetail id={route.path.split('/')[3]}/>;}
+    else if(route.path==='/admin/audit-logs'){adminTitle='لاگ حسابرسی';adminNode=<AdminAudit/>;}
+    else if(route.path!=='/admin')adminNode=<UnsupportedPage title="ابزار مدیریت"/>;
+    return <AdminLayout title={adminTitle}>{adminNode}</AdminLayout>;
+  }
+  let title='داشبورد',node=<PersonalDashboard/>;
   if(route.path==='/jobs'){title='کارهای من';node=<JobsPage/>;}
   else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<JobDetails selectedId={route.path.split('/')[2]}/>;}
   else if(route.path==='/library'){title='کتابخانه';node=<LibraryPage/>;}
   else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<CreateImagePage/>;}
-  else if(route.path==='/account/security'){title='امنیت حساب';node=<AccountSecurityPage/>;}
+  else if(route.path==='/account/security'){title='امنیت حساب';node=<><AccountSecurityPage/><AccountSecurityExtras/></>;}
+  else if(route.path==='/account/profile'){title='پروفایل';node=<ProfilePage/>;}
+  else if(route.path==='/account/preferences'){title='ترجیحات';node=<PreferencesPage/>;}
+  else if(route.path==='/account/data'){title='داده و حریم خصوصی';node=<DataPage/>;}
   else if(route.path!=='/dashboard'){title='بخش در حال توسعه';node=<UnsupportedPage/>;}
   return <UserLayout title={title}>{node}</UserLayout>;
 }
