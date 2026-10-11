@@ -9,6 +9,8 @@ import {PersonalDashboard,ProfilePage,PreferencesPage,DataPage,AccountSecurityEx
 import {AdminOverview,AdminUsers,AdminUserDetail,AdminAudit} from '../pages/Phase05Admin.jsx';
 import {PrivateLibrary,PrivateAssetDetail,ReferenceDraftPanel} from '../pages/library/PrivateLibrary.jsx';
 import {Phase06JobDetails} from '../pages/library/Phase06Jobs.jsx';
+import {ParameterStudio,PresetsPage} from '../pages/parameters/ParameterPages.jsx';
+import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentProfiles} from '../pages/registry/RegistryPages.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
@@ -39,15 +41,21 @@ function Page(){
     if(route.path==='/admin/users'){adminTitle='کاربران';adminNode=<AdminUsers/>;}
     else if(route.path.startsWith('/admin/users/')){adminTitle='جزئیات کاربر';adminNode=<AdminUserDetail id={route.path.split('/')[3]}/>;}
     else if(route.path==='/admin/audit-logs'){adminTitle='لاگ حسابرسی';adminNode=<AdminAudit/>;}
+    else if(route.path==='/admin/models'){adminTitle='مدل‌ها';adminNode=<AdminModels/>;}
+    else if(route.path==='/admin/worker-images'){adminTitle='Worker Images';adminNode=<AdminWorkerImages/>;}
+    else if(route.path==='/admin/deployment-profiles'){adminTitle='Deployment Profiles';adminNode=<AdminDeploymentProfiles/>;}
     else if(route.path!=='/admin')adminNode=<UnsupportedPage title="ابزار مدیریت"/>;
     return <AdminLayout title={adminTitle}>{adminNode}</AdminLayout>;
   }
   let title='داشبورد',node=<PersonalDashboard/>;
-  if(route.path==='/jobs'){title='کارهای من';node=<JobsPage/>;}
+  if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
+  else if(route.path.startsWith('/models/')){title='مدل';node=<ModelDetails id={route.path.split('/')[2]}/>;}
+  else if(route.path==='/presets'){title='Presetهای من';node=<PresetsPage/>;}
+  else if(route.path==='/jobs'){title='کارهای من';node=<JobsPage/>;}
   else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<Phase06JobDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/library'){title='کتابخانه';node=<PrivateLibrary/>;}
   else if(route.path.startsWith('/library/')){title='جزئیات فایل';node=<PrivateAssetDetail id={route.path.split('/')[2]}/>;}
-  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><CreateImagePage/><ReferenceDraftPanel/></>;}
+  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><ParameterStudio/><ReferenceDraftPanel/></>;}
   else if(route.path==='/account/security'){title='امنیت حساب';node=<><AccountSecurityPage/><AccountSecurityExtras/></>;}
   else if(route.path==='/account/profile'){title='پروفایل';node=<ProfilePage/>;}
   else if(route.path==='/account/preferences'){title='ترجیحات';node=<PreferencesPage/>;}

@@ -1,0 +1,32 @@
+=== Phase01 (isolated synthetic fixture) ===
+..............                                                           [100%]
+14 passed in 1.14s
+
+=== Phase02 (isolated synthetic fixture) ===
+E   ImportError: cannot import name 'db' from 'app' (unknown location)
+=========================== short test summary info ============================
+ERROR tests/test_phase02_auth.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.28s
+
+=== Phase03 (isolated synthetic fixture) ===
+E   ImportError: cannot import name 'db' from 'app' (unknown location)
+=========================== short test summary info ============================
+ERROR tests/test_phase03_owner.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.30s
+
+=== Phase05 (isolated synthetic fixture) ===
+E   ImportError: cannot import name 'db' from 'app' (unknown location)
+=========================== short test summary info ============================
+ERROR tests/test_phase05_account.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.28s
+
+=== Phase06 (isolated synthetic fixture) ===
+................                                                         [100%]
+16 passed in 0.84s
+
+=== Phase07 (isolated synthetic fixture) ===
+..............................                                           [100%]
+30 passed in 1.91s
