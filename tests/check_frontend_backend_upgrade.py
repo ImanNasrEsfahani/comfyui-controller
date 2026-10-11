@@ -67,7 +67,7 @@ class ControllerTests(unittest.TestCase):
         ]}, local_id)
         self.assertEqual(keys, [f"outputs/{local_id}/result.png"])
         with patch.object(storage, "job_images", return_value=[{"key": keys[0], "url": "https://r2.invalid/signed"}]):
-            result = self.client.get(f"/api/jobs/{local_id}/images")
+            result = self.client.get(f"/api/jobs/{local_id}/images", headers=ADMIN)
         self.assertEqual(result.status_code, 200)
         self.assertEqual(len(result.json()["images"]), 1)
 
@@ -110,7 +110,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(job["variables"], vars_)
         self.assertEqual(job["request"]["prompt"]["1"]["inputs"]["image"],
                          "https://r2.invalid/new-signed-url")
-        self.assertEqual(self.client.get(f"/api/jobs/{job['id']}/draft").json()["variables"], vars_)
+        self.assertEqual(self.client.get(f"/api/jobs/{job['id']}/draft", headers=ADMIN).json()["variables"], vars_)
 
     def test_stalled_is_not_falsely_reported_as_failure_and_can_recover(self):
         from app import main
@@ -118,11 +118,11 @@ class ControllerTests(unittest.TestCase):
         old = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
         with db.connect() as conn:
             conn.execute("UPDATE jobs SET created_at=? WHERE id=?", (old, local_id))
-        result = self.client.get("/api/jobs").json()[0]
+        result = self.client.get("/api/jobs", headers=ADMIN).json()[0]
         self.assertEqual(result["state"], "stalled")
         self.assertIn("not a confirmed failure", result["error_text"])
         with patch.object(main.salad, "get_job", return_value={"status": "succeeded", "output": {"done": True}}):
-            result = self.client.get(f"/api/jobs/{local_id}")
+            result = self.client.get(f"/api/jobs/{local_id}", headers=ADMIN)
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["state"], "succeeded")
 
@@ -132,7 +132,7 @@ class ControllerTests(unittest.TestCase):
         with patch("app.main.salad.get_job") as remote:
             self.assertEqual(self.client.delete(f"/api/jobs/{local_id}", headers=ADMIN).status_code, 204)
             remote.assert_not_called()
-        self.assertEqual(self.client.get("/api/jobs").json(), [])
+        self.assertEqual(self.client.get("/api/jobs", headers=ADMIN).json(), [])
         self.assertEqual(db.get_job(local_id)["salad_job_id"], "remote-1")
 
     def test_retry_stalled_requires_explicit_duplicate_confirmation(self):
@@ -172,7 +172,7 @@ class ControllerTests(unittest.TestCase):
             if method == "GET": return group
             return {}
         with patch.object(salad_control, "request", side_effect=fake_request) as request:
-            data = self.client.get("/api/salad/instances")
+            data = self.client.get("/api/salad/instances", headers=ADMIN)
             self.assertEqual(data.status_code, 200)
             self.assertNotIn("DO_NOT_LEAK", data.text)
             self.assertEqual(data.json()["instances"][0]["state"], "running")
