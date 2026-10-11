@@ -1,0 +1,253 @@
+{
+  "schema_sha256": "14cf7456e36e3f2e1f11556f51fec25f13ebd9c449b593ff07c835fe1b180824",
+  "schema_objects": [
+    {
+      "type": "index",
+      "name": "idx_jobs_owner",
+      "tbl_name": "jobs",
+      "sql": "CREATE INDEX idx_jobs_owner ON jobs(owner)"
+    },
+    {
+      "type": "table",
+      "name": "input_assets",
+      "tbl_name": "input_assets",
+      "sql": "CREATE TABLE input_assets (asset_id TEXT PRIMARY KEY, storage_key TEXT NOT NULL UNIQUE)"
+    },
+    {
+      "type": "table",
+      "name": "job_assets",
+      "tbl_name": "job_assets",
+      "sql": "CREATE TABLE job_assets (asset_id TEXT PRIMARY KEY, job_id TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "jobs",
+      "tbl_name": "jobs",
+      "sql": "CREATE TABLE jobs (id TEXT PRIMARY KEY, owner TEXT, workflow_id TEXT,\n                            FOREIGN KEY(workflow_id) REFERENCES workflows(id))"
+    },
+    {
+      "type": "table",
+      "name": "workflows",
+      "tbl_name": "workflows",
+      "sql": "CREATE TABLE workflows (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+    },
+    {
+      "type": "trigger",
+      "name": "jobs_no_empty_id",
+      "tbl_name": "jobs",
+      "sql": "CREATE TRIGGER jobs_no_empty_id BEFORE INSERT ON jobs WHEN NEW.id=''\n        BEGIN SELECT RAISE(ABORT,'empty id'); END"
+    }
+  ],
+  "table_counts": {
+    "input_assets": 1,
+    "job_assets": 0,
+    "jobs": 2,
+    "workflows": 1
+  },
+  "columns": {
+    "input_assets": [
+      {
+        "cid": 0,
+        "name": "asset_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "storage_key",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "job_assets": [
+      {
+        "cid": 0,
+        "name": "asset_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "job_id",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "jobs": [
+      {
+        "cid": 0,
+        "name": "id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "owner",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      },
+      {
+        "cid": 2,
+        "name": "workflow_id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ],
+    "workflows": [
+      {
+        "cid": 0,
+        "name": "id",
+        "type": "TEXT",
+        "notnull": 0,
+        "dflt_value": null,
+        "pk": 1
+      },
+      {
+        "cid": 1,
+        "name": "name",
+        "type": "TEXT",
+        "notnull": 1,
+        "dflt_value": null,
+        "pk": 0
+      }
+    ]
+  },
+  "indexes": {
+    "input_assets": [
+      {
+        "seq": 0,
+        "name": "sqlite_autoindex_input_assets_2",
+        "unique": 1,
+        "origin": "u",
+        "partial": 0
+      },
+      {
+        "seq": 1,
+        "name": "sqlite_autoindex_input_assets_1",
+        "unique": 1,
+        "origin": "pk",
+        "partial": 0
+      }
+    ],
+    "job_assets": [
+      {
+        "seq": 0,
+        "name": "sqlite_autoindex_job_assets_1",
+        "unique": 1,
+        "origin": "pk",
+        "partial": 0
+      }
+    ],
+    "jobs": [
+      {
+        "seq": 0,
+        "name": "idx_jobs_owner",
+        "unique": 0,
+        "origin": "c",
+        "partial": 0
+      },
+      {
+        "seq": 1,
+        "name": "sqlite_autoindex_jobs_1",
+        "unique": 1,
+        "origin": "pk",
+        "partial": 0
+      }
+    ],
+    "workflows": [
+      {
+        "seq": 0,
+        "name": "sqlite_autoindex_workflows_1",
+        "unique": 1,
+        "origin": "pk",
+        "partial": 0
+      }
+    ]
+  },
+  "foreign_keys": {
+    "input_assets": [],
+    "job_assets": [],
+    "jobs": [
+      {
+        "id": 0,
+        "seq": 0,
+        "table": "workflows",
+        "from": "workflow_id",
+        "to": "id",
+        "on_update": "NO ACTION",
+        "on_delete": "NO ACTION",
+        "match": "NONE"
+      }
+    ],
+    "workflows": []
+  },
+  "owner_gaps": {
+    "jobs": {
+      "owner_user_id": "column absent",
+      "owner": 1
+    },
+    "input_assets": {
+      "owner_user_id": "column absent",
+      "owner": "column absent"
+    },
+    "job_assets": {
+      "owner_user_id": "column absent",
+      "owner": "column absent"
+    },
+    "workflows": {
+      "owner_user_id": "column absent",
+      "owner": "column absent"
+    }
+  },
+  "unexpected_or_missing_tables": [
+    "controller_settings",
+    "instance_cost_periods",
+    "instance_observations",
+    "instance_operations",
+    "instance_sessions",
+    "instance_stage_events",
+    "job_attempts",
+    "job_events",
+    "job_progress",
+    "job_progress_events"
+  ],
+  "pragmas": {
+    "user_version": 0,
+    "journal_mode": "wal",
+    "foreign_keys": 0
+  },
+  "integrity_check": "ok",
+  "restore_drill": {
+    "outcome": "PASS",
+    "checks": {
+      "schema_sha256_equal": true,
+      "table_counts_equal": true,
+      "columns_equal": true,
+      "indexes_equal": true,
+      "triggers_equal": true,
+      "restored_integrity_ok": true
+    },
+    "table_counts": {
+      "input_assets": 1,
+      "job_assets": 0,
+      "jobs": 2,
+      "workflows": 1
+    },
+    "schema_sha256": "14cf7456e36e3f2e1f11556f51fec25f13ebd9c449b593ff07c835fe1b180824",
+    "scope": "isolated SQLite COPY only (NOT production restore)"
+  }
+}

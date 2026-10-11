@@ -1,0 +1,8 @@
+test_r2_count_pagination_without_reading_objects (test_phase00_baseline.BaselineTests.test_r2_count_pagination_without_reading_objects) ... ok
+test_read_only_connection_rejects_writes (test_phase00_baseline.BaselineTests.test_read_only_connection_rejects_writes) ... ok
+test_sqlite_restore_exact_schema_counts_indexes_triggers (test_phase00_baseline.BaselineTests.test_sqlite_restore_exact_schema_counts_indexes_triggers) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.005s
+
+OK
