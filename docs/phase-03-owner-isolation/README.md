@@ -1,0 +1,3 @@
+# Phase03 owner isolation (experimental / fail-closed)
+
+This patch is a **security hardening rehearsal**, NOT a complete release or production-ready multi-user implementation. Start from pinned HEAD, install new modules, then generate full replacements for `main.py`/`job_records.py` via `scripts/phase03_prepare_checkout.py`. The flag `OWNER_ISOLATION_ENABLED` defaults to false. With the flag true, user sessions read/create uploads and control owned existing jobs (not new GPU dispatch); new Generate and Retry require later work and return 503. Tests are synthetic; no server, R2 or GPU evidence.
