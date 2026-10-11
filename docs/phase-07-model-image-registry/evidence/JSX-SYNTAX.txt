@@ -1,0 +1,1 @@
+Parser: globally installed TypeScript createSourceFile JS/JSX. 5 paths checked: RegistryPages.jsx, registryClient.js, SHA-pinned transformed router.jsx, routeUtils.js, Layouts.jsx. parseDiagnostics=0 for every file. Does not prove Vite build.
