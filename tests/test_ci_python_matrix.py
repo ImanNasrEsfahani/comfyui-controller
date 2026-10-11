@@ -28,7 +28,10 @@ def test_failure_is_reported_and_next_file_still_runs(tmp_path,capsys):
  for name in ('test_a.py','test_b.py'):(d/name).write_text('pass\n')
  calls=[]
  def fake_run(cmd,**kw):
-  calls.append(cmd);return subprocess.CompletedProcess(cmd,1 if 'test_a.py' in cmd[-1] else 0)
+  calls.append(cmd)
+  bad='test_a.py' in cmd[-1]
+  Path(cmd[cmd.index('--junitxml')+1]).write_text('<testsuite tests="1" errors="0" failures="'+('1' if bad else '0')+'" skipped="0"/>')
+  return subprocess.CompletedProcess(cmd,1 if bad else 0)
  with patch.object(m.subprocess,'run',fake_run):
   assert m.run(tmp_path,files=[Path('tests/test_a.py'),Path('tests/test_b.py')])==1
  assert len(calls)==2
@@ -37,3 +40,21 @@ def test_failure_is_reported_and_next_file_still_runs(tmp_path,capsys):
 def test_focused_file_only(tmp_path):
  d=tmp_path/'tests';d.mkdir();(d/'test_ok.py').write_text('def test_ok(): assert True\n')
  assert m.run(tmp_path,files=[Path('tests/test_ok.py')],python=sys.executable)==0
+
+
+def test_junit_parser_rejects_empty(tmp_path):
+ p=tmp_path/'empty.xml';p.write_text('<testsuite tests="0"/>')
+ import pytest
+ with pytest.raises(ValueError):m.junit_totals(p)
+
+def test_junit_parser_counts_skips(tmp_path):
+ p=tmp_path/'one.xml';p.write_text('<testsuites><testsuite tests="2" errors="0" failures="0" skipped="1"/></testsuites>')
+ assert m.junit_totals(p)=={'tests':2,'errors':0,'failures':0,'skipped':1}
+
+def test_json_report_includes_per_file_counts(tmp_path):
+ root=tmp_path;d=root/'tests';d.mkdir();(d/'test_pass.py').write_text('def test_ok():assert True\n')
+ report=root/'qa'/'test-summary.json'
+ assert m.run(root,files=[Path('tests/test_pass.py')],report=report)==0
+ import json
+ result=json.loads(report.read_text())
+ assert result['totals']['tests']==1 and result['status']=='PASS' and result['discovered_files']==1

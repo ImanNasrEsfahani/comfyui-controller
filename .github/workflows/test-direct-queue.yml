@@ -1,7 +1,6 @@
-name: ComfyUI Controller Regression Suite
+name: ComfyUI Controller - Unified CI
 
 on:
-  pull_request:
   push:
     branches: [main]
     paths:
@@ -9,61 +8,81 @@ on:
       - 'frontend/**'
       - 'salad-worker/**'
       - 'tests/**'
-      - 'scripts/ci_python_matrix.py'
-      - 'scripts/phase14_prepare_checkout.py'
+      - 'scripts/**'
+      - '.github/workflows/**'
       - 'docker-compose.yml'
-      - '.github/workflows/test-direct-queue.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'salad-worker/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - 'docker-compose.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: unified-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  python-regression:
+  python-and-worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # old phase fixture sources are pinned to historic Git SHAs
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install test dependencies and actual video probe tools
+      - name: Install pinned Backend requirements and native video tooling
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg
           python -m pip install -r backend/requirements.txt pytest
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
-      - name: Run every Python/worker test file without sharing mutable fixtures
+      - name: Confirm audited historical test fixtures
+        run: python scripts/ci_fixture_fixes.py --repo . --check
+      - name: Discover and execute ALL Python test files with isolated fixtures
         shell: bash
         run: |
           mkdir -p qa
           set +e
-          python scripts/ci_python_matrix.py --repo . > qa/python.raw 2>&1
+          python scripts/ci_python_matrix.py --repo . --report qa/python-summary.json > qa/python.raw 2>&1
           result=$?
           set -e
           python scripts/phase14_redact.py --input qa/python.raw --output qa/python.txt
           rm -f qa/python.raw
           cat qa/python.txt
-          exit "$result
-      - name: Verify Python and shell syntax
+          exit "$result"
+      - name: Validate Python and Worker shell syntax
         run: |
           python -m compileall -q backend/app salad-worker scripts
           bash -n salad-worker/start.sh
-      - name: Release stays blocked without staging evidence
-        run: python scripts/phase14_release_gate.py --repo . --output release-status.json
+      - name: Inspect API mounts without enabling unapproved routes
+        run: |
+          mkdir -p qa
+          python scripts/phase14_api_inventory.py --repo . --output qa/api-mounts.json
+          python scripts/phase14_release_gate.py --repo . --output qa/release-status.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-regression-${{ github.sha }}
+          name: unified-python-${{ github.sha }}
           path: |
-            release-status.json
+            qa/python-summary.json
             qa/python.txt
+            qa/api-mounts.json
+            qa/release-status.json
           if-no-files-found: warn
           retention-days: 14
 
-  frontend-regression:
+  frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -73,31 +92,56 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install frontend dependencies and the local JSX parser
-        run: npm --prefix frontend install --no-audit --no-fund --package-lock=false
-      - name: Run all JavaScript client tests
+      - name: Install frontend deps including TypeScript parser
+        run: |
+          if test -f frontend/package-lock.json; then
+            npm --prefix frontend ci --no-audit --no-fund
+          else
+            echo 'WARNING: frontend lockfile missing, using non-reproducible install (deployment stays blocked).'
+            npm --prefix frontend install --no-audit --no-fund --package-lock=false
+          fi
+      - name: Run every Node client test and record explicit skips
         shell: bash
         run: |
           mkdir -p qa
           set +e
-          node --test tests/*.mjs > qa/frontend.raw 2>&1
-          result=$?
+          node --test tests/*.mjs > qa/node.raw 2>&1
+          node_result=$?
           set -e
-          python3 scripts/phase14_redact.py --input qa/frontend.raw --output qa/frontend.txt
-          rm -f qa/frontend.raw
-          cat qa/frontend.txt
-          exit "$result
-      - name: Build production frontend
+          python3 scripts/phase14_redact.py --input qa/node.raw --output qa/node.txt
+          rm -f qa/node.raw
+          cat qa/node.txt
+          python3 scripts/ci_node_report.py --input qa/node.txt --output qa/node-summary.json
+          exit "$node_result"
+      - name: Production Vite build
         run: npm --prefix frontend run build
-      - name: Identify lack of pinned package lock
+      - name: Verify reproducibility disclosure
         run: |
           if test ! -f frontend/package-lock.json; then
-            echo 'WARNING: frontend package-lock.json missing; full reproducibility remains a release gate.'
+            echo 'WARNING: frontend lockfile absent. CI regression does NOT approve reproducible production deployment.'
           fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: frontend-regression-${{ github.sha }}
-          path: qa/frontend.txt
+          name: unified-frontend-${{ github.sha }}
+          path: |
+            qa/node.txt
+            qa/node-summary.json
           if-no-files-found: warn
           retention-days: 14
+
+  result:
+    if: always()
+    needs: [python-and-worker, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both regression jobs to have passed
+        env:
+          PYTHON_RESULT: ${{ needs.python-and-worker.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: |
+          echo "Python/Worker: $PYTHON_RESULT"
+          echo "Frontend: $FRONTEND_RESULT"
+          test "$PYTHON_RESULT" = success
+          test "$FRONTEND_RESULT" = success
+          echo 'Unified offline regression PASS; production release gate is independent and still BLOCKED without staging evidence.'
