@@ -1,0 +1,164 @@
+{
+  "decision_files": {
+    "DECISIONS.md": false,
+    "GLOBAL-RULES.txt": false,
+    "LEGACY_OWNER_PLAN.md": false
+  },
+  "external_gates": {
+    "auth_browser": {
+      "required_evidence": "Login, verification, session, MFA and CSRF browser evidence",
+      "status": "NOT RUN"
+    },
+    "cloudflare_r2": {
+      "required_evidence": "Origin/edge TLS and private bucket authorization checks",
+      "status": "NOT RUN"
+    },
+    "deployed_source_sha": {
+      "required_evidence": "Running deployment SHA captured independently",
+      "status": "NOT RUN"
+    },
+    "mobile_accessibility": {
+      "required_evidence": "360px, RTL, keyboard and screen reader with screenshots",
+      "status": "NOT RUN"
+    },
+    "owner_backfill": {
+      "required_evidence": "Every legacy Job/Asset assigned to a verified owner",
+      "status": "NOT RUN"
+    },
+    "provider_scale": {
+      "required_evidence": "Provider-confirmed zero-to-ready-to-zero with finalization",
+      "status": "NOT RUN"
+    },
+    "real_image_e2e": {
+      "required_evidence": "Model -> Worker -> R2 -> Gallery -> Download -> Reuse",
+      "status": "NOT RUN"
+    },
+    "real_worker_claim": {
+      "required_evidence": "Signed Worker claim, lease, capability and output fencing",
+      "status": "NOT RUN"
+    },
+    "rollback_rehearsal": {
+      "required_evidence": "Realistic staged rollback and data compatibility proof",
+      "status": "NOT RUN"
+    },
+    "staging_restore": {
+      "required_evidence": "Isolated copy of deployed database restored and checked",
+      "status": "NOT RUN"
+    },
+    "two_account_http": {
+      "required_evidence": "Two-account direct API authorization matrix in staging",
+      "status": "NOT RUN"
+    },
+    "worker_digest": {
+      "required_evidence": "OCI image provenance, approved model and node inventory",
+      "status": "NOT RUN"
+    }
+  },
+  "feature_policy": "Keep new multi-user Generation/Worker/Video/Scale flags OFF",
+  "generated_at_utc": "2026-10-11T22:27:45.267939+00:00",
+  "phases": [
+    {
+      "phase": "00",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "95173560664fc1a8d520e1142a3fa6627326a13d24775500cb309e08ede98eb4",
+      "source": "docs/phase-00-baseline/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "01",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "58fe4b768b62ecd4d5a6d9cf9554822412eea163286c589391475bcb3ffd37c6",
+      "source": "docs/phase-01-database-identity/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "02",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "9b805839a1bae84f765f36624709a7b972e0a2e482b70b5a51cd1da611c3d242",
+      "source": "docs/phase-02-authentication/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "03",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "1acbfcbdd3d53c6849c94d9831fbb05daa6a55fea75e57a32495c47859616d85",
+      "source": "docs/phase-03-owner-isolation/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "04",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "96f4d398734c789d9d06628651964459002c7a8e91b5ea419360c61365faf848",
+      "source": "docs/phase-04-auth-ui-routing/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "05",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "b8152c2f426b372dfdd675f557d540646087d86a91c42b2a96f2c124519e0083",
+      "source": "docs/phase-05-user-admin-dashboard/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "06",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "aebca6fdcc8a5b86260c300897ed15b57a84c59bf564b818522144b1c7fe959b",
+      "source": "docs/phase-06-private-gallery/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "07",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "3b0e2e84b8c202a55a7c6a59e2ff1d203084c135462914c78c7d16f9b4cdd62d",
+      "source": "docs/phase-07-model-image-registry/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "08",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "caa0b1ec4c2354bb2d13e81adc0b46140703340a317384a8384c739f7662fd81",
+      "source": "docs/phase-08-dynamic-params-lora-seed/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "09",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "e1f9bf1684a32ef66522c7da4bc5a646ede95a211a74b8435bfc28492698dc18",
+      "source": "docs/phase-09-workflow-compiler/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "10",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "94de93011533e6dae2ababc3d793138b40b78f6d6aa4964ea43eef499c29cbb2",
+      "source": "docs/phase-10-workflow-studio/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "11",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "4ce6bf6633ef9d3b9765c0a32dfa09c5a893d21ff681d40894071bd7cbfba119",
+      "source": "docs/phase-11-worker-execution/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "12",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "f7f39bf00ec57a36a1a8dfaa607673f41a3aa25d5c37762e2102a60c772be8de",
+      "source": "docs/phase-12-gpu-scheduling/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    },
+    {
+      "phase": "13",
+      "reason": "Historical handoff is not deployment evidence",
+      "sha256": "b023c095bae36e41fd364679140b6bfd8df73cff20e5298c6f93fdfeba336246",
+      "source": "docs/phase-13-video-workflows/HANDOFF.md",
+      "status": "PARTIAL/BLOCKED"
+    }
+  ],
+  "reason": "No independent, environment-bound, operator-approved E2E/backup/runtime attestations; historical unit tests cannot certify release",
+  "release_status": "BLOCKED",
+  "schema_version": 1,
+  "source_sha": null,
+  "submitted_evidence_files_unverified": []
+}

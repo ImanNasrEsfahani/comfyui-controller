@@ -1,0 +1,16 @@
+{
+  "observed_from": "GitHub read-only connector",
+  "repository": "ImanNasrEsfahani/comfyui-controller",
+  "github_main_sha": "8a591a3e501ba5a09751659357c625ac05babaf0",
+  "github_commit_at": "2026-10-11T22:21:42Z",
+  "main_py_git_blob": "f3fc84226be8704e4ae4d63b63babb84ca0ea291",
+  "main_py_include_router_occurrences": 0,
+  "main_py_contains_APP_INTERNAL_TOKEN": true,
+  "worker_v11_api_claim_returns_503": true,
+  "new_router_source_files_exist": true,
+  "global_rules_received": false,
+  "approved_decisions_received": false,
+  "full_git_clone_available_locally": false,
+  "conclusion": "P0 RELEASE BLOCKED: new modular API source exists but integration not observed; signed worker Claim disabled",
+  "limitation": "Read-only GitHub source evidence, not live runtime/deployment verification"
+}

@@ -1,0 +1,2 @@
+CI YAML parse: PASS; 4 jobs; read-only permissions; no deploy job
+NOT RUN in GitHub Actions.
