@@ -1,0 +1,19 @@
+test_01_revisions_idempotent_counts_fk_and_triggers (test_phase01_identity.Phase01.test_01_revisions_idempotent_counts_fk_and_triggers) ... ok
+test_02_unclaimed_quarantine_and_fk_rejection (test_phase01_identity.Phase01.test_02_unclaimed_quarantine_and_fk_rejection) ... ok
+test_03_a_b_sql_isolation_and_preset (test_phase01_identity.Phase01.test_03_a_b_sql_isolation_and_preset) ... ok
+test_04_idempotency_owner_scoped_at_mapping_level (test_phase01_identity.Phase01.test_04_idempotency_owner_scoped_at_mapping_level) ... ok
+test_05_safe_backup_restore_and_failed_schema_rolls_back (test_phase01_identity.Phase01.test_05_safe_backup_restore_and_failed_schema_rolls_back) ... ok
+test_06_admin_cli_library_and_password_hash (test_phase01_identity.Phase01.test_06_admin_cli_library_and_password_hash) ... ok
+test_07_legacy_backfill_explicit_and_orphan_safe (test_phase01_identity.Phase01.test_07_legacy_backfill_explicit_and_orphan_safe) ... ok
+test_08_no_data_export_or_download_side_effects (test_phase01_identity.Phase01.test_08_no_data_export_or_download_side_effects) ... ok
+test_downgrade_refuses_user_data (test_phase01_identity.Phase01Downgrade.test_downgrade_refuses_user_data) ... ok
+test_synthetic_copy_up_and_down_preserves_legacy_data (test_phase01_identity.Phase01Downgrade.test_synthetic_copy_up_and_down_preserves_legacy_data) ... ok
+test_activate_scoped_index_allows_two_users_same_key_in_sql (test_phase01_identity.Phase01PatchAndScopedIndex.test_activate_scoped_index_allows_two_users_same_key_in_sql) ... ok
+test_patch_anchors_reject_drift_and_transform_expected_fragments (test_phase01_identity.Phase01PatchAndScopedIndex.test_patch_anchors_reject_drift_and_transform_expected_fragments) ... ok
+test_hashed_session_account_status_revocation_and_cross_account (test_phase01_identity.Phase01Sessions.test_hashed_session_account_status_revocation_and_cross_account) ... ok
+test_pending_account_cannot_issue_session (test_phase01_identity.Phase01Sessions.test_pending_account_cannot_issue_session) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 1.040s
+
+OK

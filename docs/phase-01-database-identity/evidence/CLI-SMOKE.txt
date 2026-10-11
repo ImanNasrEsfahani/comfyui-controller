@@ -1,0 +1,12 @@
+Synthetic disposable SQLite fixture only; no real deployment or server state:
+
+$ python scripts/phase01_database.py backup-copy --source <synthetic-test.db> --destination <synthetic-copy.db>
+Backup copy created and integrity-checked (no row content printed)
+$ python scripts/phase01_database.py migrate-copy --copy <synthetic-copy.db>
+{"applied": ["001_identity", "002_owner_columns", "003_legacy_review"], "revision": "003_legacy_review", "unclaimed_input_assets": 1, "unclaimed_job_assets": 2, "unclaimed_jobs": 2}
+$ python scripts/phase01_database.py migrate-copy --copy <synthetic-copy.db>
+{"applied": ["001_identity", "002_owner_columns", "003_legacy_review"], "revision": "003_legacy_review", "unclaimed_input_assets": 1, "unclaimed_job_assets": 2, "unclaimed_jobs": 2}
+$ python scripts/phase01_database.py downgrade-empty-copy --copy <synthetic-copy.db>
+{"downgraded": true, "legacy_tables_preserved": true}
+
+PASS synthetic CLI. Actual production copy, full Repo regressions and GHCR Worker NOT RUN.
