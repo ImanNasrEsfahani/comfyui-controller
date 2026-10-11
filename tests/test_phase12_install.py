@@ -48,10 +48,13 @@ def test_overlay_before_installer_is_accepted(tmp_path,monkeypatch):
  import zipfile
  repo=tmp_path/'repo';repo.mkdir();(repo/'.git').mkdir()
  sources={'backend/app/main.py':b'old main\n'}
- with zipfile.ZipFile('/mnt/data/comfyui-phase10-workflow-studio.zip') as z:
-  for p in ('frontend/src/app/router.jsx','frontend/src/auth/routeUtils.js'):sources[p]=z.read(p)
- with zipfile.ZipFile('/mnt/data/comfyui-phase09-workflow-compiler.zip') as z:
-  sources['frontend/src/layouts/Layouts.jsx']=z.read('frontend/src/layouts/Layouts.jsx')
+ # Historical fixtures must come from Git revisions, never a developer's
+ # /mnt/data folder. actions/checkout in CI uses fetch-depth: 0.
+ for p in ('frontend/src/app/router.jsx','frontend/src/auth/routeUtils.js'):
+  sources[p]=subprocess.check_output(['git','-C',str(ROOT),'show',
+   '41b11228bc4728b2781966eafb6d23fe1831cb2f:'+p])
+ sources['frontend/src/layouts/Layouts.jsx']=subprocess.check_output(['git','-C',str(ROOT),'show',
+  'd51a4eac487bee4f69808a9e8d49016fcafe624a:frontend/src/layouts/Layouts.jsx'])
  for p,data in sources.items():
   dest=repo/p;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
  for p in ('scripts/phase11_prepare_checkout.py','scripts/phase09_prepare_checkout.py',

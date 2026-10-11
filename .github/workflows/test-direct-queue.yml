@@ -5,39 +5,99 @@ on:
   push:
     branches: [main]
     paths:
-      - "backend/**"
-      - "frontend/**"
-      - "salad-worker/**"
-      - "tests/**"
-      - "docker-compose.yml"
-      - ".github/workflows/test-direct-queue.yml"
+      - 'backend/**'
+      - 'frontend/**'
+      - 'salad-worker/**'
+      - 'tests/**'
+      - 'scripts/ci_python_matrix.py'
+      - 'scripts/phase14_prepare_checkout.py'
+      - 'docker-compose.yml'
+      - '.github/workflows/test-direct-queue.yml'
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  python-regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # old phase fixture sources are pinned to historic Git SHAs
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install test dependencies
-        run: python -m pip install -r backend/requirements.txt pytest
-      - name: Run backend and worker regression tests
-        run: PYTHONPATH=backend python -m pytest -q tests tests/check_frontend_backend_upgrade.py
-      - name: Run frontend contract and download tests
-        run: node --test tests/*.mjs
+          python-version: '3.12'
+      - name: Install test dependencies and actual video probe tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install -r backend/requirements.txt pytest
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Run every Python/worker test file without sharing mutable fixtures
+        shell: bash
+        run: |
+          mkdir -p qa
+          set +e
+          python scripts/ci_python_matrix.py --repo . > qa/python.raw 2>&1
+          result=$?
+          set -e
+          python scripts/phase14_redact.py --input qa/python.raw --output qa/python.txt
+          rm -f qa/python.raw
+          cat qa/python.txt
+          exit "$result
       - name: Verify Python and shell syntax
         run: |
-          python -m compileall -q backend/app salad-worker
+          python -m compileall -q backend/app salad-worker scripts
           bash -n salad-worker/start.sh
-      - name: Compile frontend
+      - name: Release stays blocked without staging evidence
+        run: python scripts/phase14_release_gate.py --repo . --output release-status.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-regression-${{ github.sha }}
+          path: |
+            release-status.json
+            qa/python.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  frontend-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install frontend dependencies and the local JSX parser
+        run: npm --prefix frontend install --no-audit --no-fund --package-lock=false
+      - name: Run all JavaScript client tests
+        shell: bash
         run: |
-          npm --prefix frontend install --no-audit --no-fund
-          npm --prefix frontend run build
+          mkdir -p qa
+          set +e
+          node --test tests/*.mjs > qa/frontend.raw 2>&1
+          result=$?
+          set -e
+          python3 scripts/phase14_redact.py --input qa/frontend.raw --output qa/frontend.txt
+          rm -f qa/frontend.raw
+          cat qa/frontend.txt
+          exit "$result
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Identify lack of pinned package lock
+        run: |
+          if test ! -f frontend/package-lock.json; then
+            echo 'WARNING: frontend package-lock.json missing; full reproducibility remains a release gate.'
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-regression-${{ github.sha }}
+          path: qa/frontend.txt
+          if-no-files-found: warn
+          retention-days: 14

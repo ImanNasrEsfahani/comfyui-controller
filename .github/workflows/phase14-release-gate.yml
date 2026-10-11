@@ -3,65 +3,97 @@ on:
   workflow_dispatch:
     inputs:
       enforce_release:
-        description: "Refuse promotion unless independently attested (expected to FAIL while blocked)"
+        description: 'Require independently attested environment-bound P0 evidence'
         type: boolean
         required: false
         default: false
   pull_request:
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'salad-worker/**'
-      - 'tests/**'
-      - 'scripts/phase14_*'
-      - '.github/workflows/phase14-release-gate.yml'
-      - 'docs/phase-*/HANDOFF.md'
-      - 'docker-compose.yml'
+    paths: ['backend/**','frontend/**','salad-worker/**','tests/**','scripts/phase14_*','scripts/ci_python_matrix.py','.github/workflows/phase14-release-gate.yml','docs/phase-*/HANDOFF.md','docker-compose.yml']
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'salad-worker/**'
-      - 'tests/**'
-      - 'scripts/phase14_*'
-      - '.github/workflows/phase14-release-gate.yml'
-      - 'docs/phase-*/HANDOFF.md'
-      - 'docker-compose.yml'
+    paths: ['backend/**','frontend/**','salad-worker/**','tests/**','scripts/phase14_*','scripts/ci_python_matrix.py','.github/workflows/phase14-release-gate.yml','docs/phase-*/HANDOFF.md','docker-compose.yml']
 permissions:
   contents: read
 jobs:
-  backend-worker:
+  inventory:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install pinned application dependencies and pytest
-        run: python -m pip install -r backend/requirements.txt pytest
-      - name: Python/worker suites (no user/provider credentials)
+      - name: Phase14 tool tests
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_phase14_*.py
+      - name: Composite source integration dry run (audited ancestry and blobs)
+        run: python scripts/phase14_prepare_checkout.py --repo .
+      - name: Export reviewed integration candidates and compile their syntax
+        run: |
+          target="$(mktemp -d)"
+          rmdir "$target"
+          python scripts/phase14_prepare_checkout.py --repo . --export-dir "$target"
+          python -m py_compile "$target/backend/app/main.py" "$target/backend/app/job_records.py" "$target/salad-worker/pull_worker.py"
+          python - "$target/backend/app/main.py" <<'PYVERIFY'
+          import ast,sys
+          p=sys.argv[1]
+          tree=ast.parse(open(p,encoding='utf8').read())
+          mounted=[c for c in ast.walk(tree) if isinstance(c,ast.Call) and isinstance(c.func,ast.Attribute) and c.func.attr=='include_router']
+          if len(mounted)<8:raise SystemExit('Composite router count below expected, refuse candidate')
+          print('Offline source export: '+str(len(mounted))+' routers, not a production activation')
+          PYVERIFY
+          rm -rf "$target"
+      - name: Report release readiness (no promotion)
+        if: always()
+        run: |
+          mkdir -p qa
+          python scripts/phase14_release_gate.py --repo . --output qa/release-status.json
+          python scripts/phase14_api_inventory.py --repo . --output qa/api-mounts.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase14-gates-${{ github.sha }}
+          path: qa/*.json
+          if-no-files-found: error
+          retention-days: 30
+  backend-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies and media tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install -r backend/requirements.txt pytest
+      - name: Isolated all-file regression (no tests silently omitted)
         shell: bash
         run: |
           mkdir -p qa
           set +e
-          PYTHONPATH=backend python -m pytest -q --tb=line --show-capture=no tests tests/check_frontend_backend_upgrade.py > qa/backend.raw 2>&1
+          python scripts/ci_python_matrix.py --repo . > qa/backend.raw 2>&1
           result=$?
           set -e
           python scripts/phase14_redact.py --input qa/backend.raw --output qa/backend.txt
           rm -f qa/backend.raw
           cat qa/backend.txt
           exit "$result"
-      - name: Imported FastAPI OpenAPI inventory (no server or provider calls)
+      - name: Read-only runtime OpenAPI snapshot
         run: python scripts/phase14_api_inventory.py --repo . --runtime --output qa/openapi-import.json
-      - name: Syntax contracts
+      - name: Python/shell syntax
         run: |
           python -m compileall -q backend/app salad-worker scripts
           bash -n salad-worker/start.sh
-      - name: Upload sanitized evidence
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: phase14-backend-${{ github.sha }}
           path: qa/*.txt
@@ -72,10 +104,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Frontend logic suites
+      - name: Install frontend dependencies before JSX/TypeScript tests
+        run: npm --prefix frontend install --no-audit --no-fund --package-lock=false
+      - name: Run all frontend tests, including JSX syntax checks
         shell: bash
         run: |
           mkdir -p qa
@@ -87,50 +123,20 @@ jobs:
           rm -f qa/frontend.raw
           cat qa/frontend.txt
           exit "$result"
-      - name: "Vite production build (package-lock absent: reproducibility remains a release blocker)"
-        run: |
-          npm --prefix frontend install --no-audit --no-fund --package-lock=false
-          npm --prefix frontend run build
-      - name: Upload sanitized evidence
+      - name: Build production Vite bundle
+        run: npm --prefix frontend run build
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: phase14-frontend-${{ github.sha }}
           path: qa/*.txt
           if-no-files-found: warn
           retention-days: 14
-  inventory:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install pytest for Phase14 tooling
-        run: python -m pip install pytest
-      - name: Phase 14 test release tooling
-        run: python -m pytest -q tests/test_phase14_*.py
-      - name: Verify composite integration on exact checkout (dry-run only)
-        run: python3 scripts/phase14_prepare_checkout.py --repo .
-      - name: Prepare source and route evidence
-        if: always()
-        run: |
-          mkdir -p qa
-          python3 scripts/phase14_release_gate.py --repo . --output qa/release-status.json
-          python3 scripts/phase14_api_inventory.py --repo . --output qa/api-mounts.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: phase14-gates-${{ github.sha }}
-          path: qa/*.json
-          if-no-files-found: error
-          retention-days: 30
   promotion-check:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.enforce_release }}
     needs: [backend-worker, frontend, inventory]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fail closed until external release gates are attested
-        run: python3 scripts/phase14_release_gate.py --repo . --enforce
+      - name: Strictly require independent staging and security signoff
+        run: python scripts/phase14_release_gate.py --repo . --enforce

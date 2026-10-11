@@ -1,13 +1,16 @@
 name: Build Salad GPU Worker
 
+# Never publish a multi-GB OCI image merely because an unrelated phase was
+# committed. Building/pushing this image is an explicit, separately authorized
+# operation; it does NOT deploy or start any Salad GPU instances.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "salad-worker/**"
-      - ".github/workflows/build-salad-worker.yml"
+    inputs:
+      confirm_build_and_push:
+        description: 'Explicitly authorize a potentially large GHCR image build and push'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -15,29 +18,37 @@ permissions:
 
 jobs:
   build:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_build_and_push }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - name: Checkout repository
+      - name: Checkout repository with archived fixtures
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-
-      - name: Validate direct queue before expensive GPU image build
+          node-version: '22'
+      - name: Install test tools
         run: |
-          python3 -m pip install -q -r backend/requirements.txt pytest
-          PYTHONPATH=backend python3 -m pytest -q tests tests/check_frontend_backend_upgrade.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python3 -m pip install -r backend/requirements.txt pytest
+          npm --prefix frontend install --no-audit --no-fund --package-lock=false
+      - name: Validate every backend/worker test file first
+        run: |
+          python3 scripts/ci_python_matrix.py --repo .
+          python3 -m compileall -q backend/app salad-worker scripts
           bash -n salad-worker/start.sh
-          python3 -m compileall -q backend/app salad-worker
-
-      - name: Run frontend regression tests and build
+      - name: Validate frontend tests and production build
         run: |
           node --test tests/*.mjs
-          npm --prefix frontend install --no-audit --no-fund
           npm --prefix frontend run build
-
+      - name: Check release evidence without falsely approving production
+        run: python3 scripts/phase14_release_gate.py --repo . --output release-status.json
       - name: Free runner disk space
         shell: bash
         run: |
@@ -49,18 +60,15 @@ jobs:
           sudo apt-get clean
           docker system prune -af || true
           df -h
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push DIRECT PULL FP8 worker with Python headers
+      - name: Build and push reviewed FP8 worker (GHCR only)
         uses: docker/build-push-action@v6
         with:
           context: ./salad-worker
@@ -73,8 +81,6 @@ jobs:
             ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-direct-v1
           labels: |
             org.opencontainers.image.source=https://github.com/ImanNasrEsfahani/comfyui-controller
-
-      - name: Inspect published chunked image
+      - name: Inspect published worker image (not a worker-ready check)
         run: |
-          docker buildx imagetools inspect \
-            ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-direct-v1
+          docker buildx imagetools inspect ghcr.io/imannasresfahani/comfyui-controller-salad-worker:fp8-direct-v1

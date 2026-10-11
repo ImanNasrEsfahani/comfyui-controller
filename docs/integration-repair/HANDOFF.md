@@ -1,0 +1,7 @@
+# Handoff — integration repair round 1
+
+**Patch is only locally tested, not DONE_VERIFIED; all P0 release blockers remain.** Source base at packaging: `1fa7375a075cd8348e939bf2de4a882998bde6c0`. GitHub connection read-only.
+
+Next implementer should apply only through reviewed GitHub workflow, inspect first full-action run results, and fix any remaining test failures without suppressing cases. Once full candidate export and syntax pass, integrate the approved routers in a staging checkout and write direct two-user authorization tests. Reconcile existing legacy job creation with atomic owner/asset/quota/idempotency; implement verified signed Worker claims/lease fencing and output ownership before activating new-generation entrypoints. Test isolated production-derived SQLite restore/backfill, private R2 bytes and expiring presigns, model+image signed readiness and real GPU image workflow with controlled cost authorization. Keep optional video unavailable until independently supported and verified. Run 360px, RTL, keyboard and a comprehensive browser E2E, then re-evaluate Phase14 release gate with independent reviewer.
+
+Unknowns / release holds: missing approved decision files, current production source SHA, production-derived DB snapshot and owner plan, real bucket access policy, provider digest/model and lease telemetry, secrets rotation sign-off, performance data, disaster recovery drill. No time-bound release commitment can be inferred.

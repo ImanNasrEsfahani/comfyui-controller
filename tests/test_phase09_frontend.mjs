@@ -19,4 +19,4 @@ test('No browser internal Worker/GPU call in studio',()=>{const s=file('frontend
 test('Source syntax all modified files',()=>{const ts=requireTs();for(const p of ['frontend/src/app/router.jsx','frontend/src/auth/routeUtils.js','frontend/src/layouts/Layouts.jsx','frontend/src/pages/workflows/workflowClient.js','frontend/src/pages/workflows/WorkflowPages.jsx']){const src=file(p),sf=ts.createSourceFile(p,src,ts.ScriptTarget.Latest,true,p.endsWith('.jsx')?ts.ScriptKind.JSX:ts.ScriptKind.JS);assert.equal(sf.parseDiagnostics.length,0,p+': '+sf.parseDiagnostics.map(d=>d.messageText).join(';'))}});
 function requireTs(){return (awaitRequire)()}
 function awaitRequire(){return globalThis.__ts||=requireFromNode('typescript')}
-function requireFromNode(name){const {createRequire}=process.getBuiltinModule('module');const r=createRequire(import.meta.url);try{return r('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js')}catch{return r(name)}}
+function requireFromNode(name){const {createRequire}=process.getBuiltinModule('module');return createRequire(new URL('../frontend/package.json',import.meta.url))(name)}

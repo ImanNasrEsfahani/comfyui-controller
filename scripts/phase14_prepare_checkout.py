@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline, exact-HEAD composite source EXPORT for Phase03-13 router/worker patches.
+"""Offline, audited-ancestry composite source EXPORT for Phase03-13 router/worker patches.
 
 Never edits the checked-out Git worktree or production. Produces full reviewed
 replacement candidates in a separate empty directory after hash/anchor checks.
@@ -34,7 +34,19 @@ def prepare(root:Path):
  root=root.resolve()
  if not (root/'.git').exists():raise RuntimeError('Complete git checkout required; no synthetic clone')
  sha=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
- if sha!=BASE:raise RuntimeError('Main SHA changed: do not replay old source transform')
+ if sha!=BASE:
+  # Phase14 itself changes HEAD; pin source ancestry and relevant Git blobs,
+  # never the historical tip SHA alone. Other relevant edits still fail closed.
+  ancestor=subprocess.run(['git','-C',str(root),'merge-base','--is-ancestor',BASE,sha],capture_output=True)
+  if ancestor.returncode:
+   raise RuntimeError('Main SHA changed outside audited ancestry; refuse transform')
+  changed=subprocess.check_output(['git','-C',str(root),'diff','--name-only',BASE,sha,'--',*PREREQUISITES],text=True).strip()
+  if changed:raise RuntimeError('Prerequisite source changed since audit: '+changed.replace('\n',', '))
+ for f in PREREQUISITES:
+  changed=subprocess.run(['git','-C',str(root),'diff','--quiet','HEAD','--',f])
+  staged=subprocess.run(['git','-C',str(root),'diff','--cached','--quiet','HEAD','--',f])
+  if changed.returncode or staged.returncode:
+   raise RuntimeError('Prerequisite working tree changed: '+f)
  for f in PREREQUISITES:
   if not (root/f).is_file():raise RuntimeError('Missing prerequisite: '+f)
  for path,expected in BLOBS.items():
