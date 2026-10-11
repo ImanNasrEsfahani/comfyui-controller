@@ -15,7 +15,7 @@ export function safeReturnTo(input, fallback = '/dashboard') {
 }
 
 export function isUserPath(path) {
-  return /^\/models\/[A-Za-z0-9_-]{1,96}$/.test(path) || USER_ROUTES.includes(path) || /^\/jobs\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/library\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/workflows\/[A-Za-z0-9_-]{1,96}\/versions$/.test(path);
+  return /^\/models\/[A-Za-z0-9_-]{1,96}$/.test(path) || USER_ROUTES.includes(path) || /^\/jobs\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/library\/[A-Za-z0-9_-]{1,96}$/.test(path) || /^\/workflows\/[A-Za-z0-9_-]{1,96}\/(?:versions|edit\/[A-Za-z0-9_-]{1,96})$/.test(path);
 }
 export function routeFor(path) {
   const normalized = (typeof path === 'string' ? path.replace(/\/+$/, '') || '/' : '/');

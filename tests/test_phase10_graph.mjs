@@ -1,0 +1,17 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {addNode,removeNode,addEdge,checkEdge,bindInput,outputBinding,createHistory,commit,undo,redo,diffGraph,snap,safeLayout} from '../frontend/src/components/workflow-canvas/graphEdit.mjs';
+const types=[{kind:'prompt',inputs:{text:'text'},outputs:{conditioning:'conditioning'}},{kind:'sampler',inputs:{positive:'conditioning',seed:'integer'},outputs:{latent:'latent'}},{kind:'image_output',inputs:{images:'image'},outputs:{}}];
+const graph={intent:'text2img',nodes:[{id:'one',kind:'prompt'},{id:'two',kind:'sampler'}],edges:[],inputs:[],outputs:[]};
+test('unknown node denied',()=>assert.throws(()=>addNode(graph,'execute_shell',types)));
+test('approved node added to allowlist',()=>assert.equal(addNode(graph,'image_output',types).nodes.length,3));
+test('typing allows conditioning->conditioning',()=>assert.equal(checkEdge(graph,{from:'one',out:'conditioning',to:'two',in:'positive'},types),null));
+test('invalid media type denied',()=>assert.match(checkEdge(graph,{from:'two',out:'latent',to:'two',in:'seed'},types),/Incompatible/));
+test('edge connection immutable and unique',()=>{const e={from:'one',out:'conditioning',to:'two',in:'positive'};const a=addEdge(graph,e,types);assert.equal(graph.edges.length,0);assert.equal(a.edges.length,1);assert.throws(()=>addEdge(a,e,types));});
+test('cycle checker',()=>{const cycTypes=[{kind:'loop',inputs:{a:'image'},outputs:{a:'image'}}];const g={...graph,nodes:[{id:'n1',kind:'loop'},{id:'n2',kind:'loop'}],edges:[{from:'n1',out:'a',to:'n2',in:'a'}]};assert.equal(checkEdge(g,{from:'n2',out:'a',to:'n1',in:'a'},cycTypes),'Cycles not allowed');});
+test('input binding role preserved',()=>assert.equal(bindInput(graph,{key:'seed',role:'seed',node:'two',port:'seed',type:'integer',required:true},types).inputs[0].role,'seed'));
+test('duplicate port input rejected',()=>{const g=addEdge(graph,{from:'one',out:'conditioning',to:'two',in:'positive'},types);assert.throws(()=>bindInput(g,{key:'prompt',role:'source',node:'two',port:'positive',type:'conditioning',required:true},types));});
+test('node removal cleans edges and inputs',()=>{const g=addEdge(graph,{from:'one',out:'conditioning',to:'two',in:'positive'},types);assert.equal(removeNode(g,'one').edges.length,0)});
+test('output binding only actual output',()=>{const g=addNode(graph,'image_output',types);assert.throws(()=>outputBinding(g,'one'));assert.equal(outputBinding(g,g.nodes.at(-1).id).outputs[0].media_type,'image');});
+test('undo redo no corruption',()=>{const h=createHistory(graph);const h1=commit(h,addNode(graph,'image_output',types));assert.equal(undo(h1).present.graph.nodes.length,2);assert.equal(redo(undo(h1)).present.graph.nodes.length,3);});
+test('diff reports added nodes',()=>assert.equal(diffGraph(graph,addNode(graph,'image_output',types)).nodes_added.length,1));
+test('layout snapping rejects unknown',()=>assert.deepEqual(safeLayout({one:{x:11,y:19},other:{x:2,y:4}},graph),{one:{x:20,y:20}}));

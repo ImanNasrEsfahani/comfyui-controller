@@ -219,3 +219,7 @@ def publish(version_id:str,data:Publish,actor=Depends(mutate)):
   audited(c,actor,'workflow.publish.metadata',d['id'],version_id)
  return {'id':version_id,'status':'published','active_version_id':version_id,
          'gpu_deployed':False,'job_create_enabled':False}
+
+# Stage10 routes mounted under the existing, opt-in Phase09 router; no main.py rewrite.
+from .studio_api import router as studio_router
+router.include_router(studio_router)

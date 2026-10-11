@@ -1,0 +1,5 @@
+TypeScript JSX syntax parser: PASS (6 changed/new JS/JSX/MJS modules)
+tinycss2 parser: PASS (studio.css; zero error tokens)
+Vite build: NOT RUN (node_modules unavailable)
+Playwright/browser: NOT RUN
+GPU/Salad/Worker: NOT RUN

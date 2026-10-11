@@ -12,10 +12,12 @@ import {Phase06JobDetails} from '../pages/library/Phase06Jobs.jsx';
 import {ParameterStudio,PresetsPage} from '../pages/parameters/ParameterPages.jsx';
 import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentProfiles} from '../pages/registry/RegistryPages.jsx';
 import {WorkflowStudio,WorkflowList,WorkflowVersions} from '../pages/workflows/WorkflowPages.jsx';
+import {StudioEditor,StudioVersions} from '../pages/workflows/StudioV2.jsx';
 
 // Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
 const ENABLED=import.meta.env.VITE_AUTH_UI_ENABLED==='true';
+const STUDIO_ENABLED=import.meta.env.VITE_WORKFLOW_STUDIO_ENABLED==='true';
 const AuthPageMap={'/login':LoginPage,'/register':RegisterPage,'/verify-email':VerifyPage,'/forgot-password':ForgotPage,'/reset-password':ResetPage,'/auth/2fa':TwoFactorPage};
 
 function Redirect({to}) { useEffect(()=>navigate(to,{replace:true}),[to]);return <div className="p04-root p04-wait" role="status">در حال تغییر مسیر…</div>; }
@@ -49,9 +51,10 @@ function Page(){
     return <AdminLayout title={adminTitle}>{adminNode}</AdminLayout>;
   }
   let title='داشبورد',node=<PersonalDashboard/>;
-  if(route.path==='/workflows/new'){title='Workflow Studio';node=<WorkflowStudio/>;}
+  if(route.path==='/workflows/new'){title='Workflow Studio';node=STUDIO_ENABLED?<StudioEditor/>:<WorkflowStudio/>;}
   else if(route.path==='/workflows'){title='Workflowهای من';node=<WorkflowList/>;}
-  else if(route.path.startsWith('/workflows/')){title='نسخه‌های Workflow';node=<WorkflowVersions id={route.path.split('/')[2]}/>;}
+  else if(/^\/workflows\/[^/]+\/edit\/[^/]+$/.test(route.path)){title='ویرایش Workflow';node=STUDIO_ENABLED?<StudioEditor definitionId={route.path.split('/')[2]} versionId={route.path.split('/')[4]}/>:<UnsupportedPage title="Studio Graph UI غیرفعال است"/>;}
+  else if(route.path.startsWith('/workflows/')){title='نسخه‌های Workflow';node=STUDIO_ENABLED?<StudioVersions id={route.path.split('/')[2]}/>:<WorkflowVersions id={route.path.split('/')[2]}/>;}
   else if(route.path==='/tools'){title='کاتالوگ';node=<ToolsCatalog/>;}
   else if(route.path.startsWith('/models/')){title='مدل';node=<ModelDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/presets'){title='Presetهای من';node=<PresetsPage/>;}
