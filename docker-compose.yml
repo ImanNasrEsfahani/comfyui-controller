@@ -2,6 +2,7 @@ services:
   backend:
     build:
       context: ./backend
+    command: ["uvicorn", "app.integrated_main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - ./.env
     volumes:
@@ -10,8 +11,8 @@ services:
       - "127.0.0.1:8100:8000"
     restart: unless-stopped
 
-  # Opt-in, single scheduler for the self-hosted queue. It does nothing to
-  # Salad unless DIRECT_QUEUE_ENABLED and DIRECT_GPU_AUTO_CONTROL are true.
+  # Legacy Direct Queue Scheduler remains separately authenticated. No v12
+  # provider auto-execution is enabled by this release.
   scheduler:
     profiles: [direct]
     build:
@@ -28,6 +29,9 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_AUTH_UI_ENABLED: "true"
+        VITE_WORKFLOW_STUDIO_ENABLED: "true"
     depends_on:
       - backend
     ports:

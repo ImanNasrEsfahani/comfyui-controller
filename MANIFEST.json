@@ -1,0 +1,57 @@
+{
+  "base_commit": "ef0c166689120bf02a56f159a373c1ec84b2bd73",
+  "delivery": "complete replacement/additional source files for GitHub web upload",
+  "files": [
+    {
+      "path": "backend/app/integrated_main.py",
+      "bytes": 4528,
+      "sha256": "863a3586be0b99cf5078f30d2552c8840f59070c133cb70936d79b8dffa28e29"
+    },
+    {
+      "path": "backend/app/migrate_offline.py",
+      "bytes": 7042,
+      "sha256": "533a9ff23438218b5666346754bf03cb4501a859d33f75a22d75500c4ad5ff7b"
+    },
+    {
+      "path": "backend/app/create_admin.py",
+      "bytes": 2031,
+      "sha256": "0e64f15ee19deee27ef3dc42769492f546de3ddff3e97fe2c6e7a1909b061619"
+    },
+    {
+      "path": "frontend/Dockerfile",
+      "bytes": 502,
+      "sha256": "158662c01e15298a9ab2dbed340e52aa16e44871f9814bc8850bbb192009d003"
+    },
+    {
+      "path": "docker-compose.yml",
+      "bytes": 959,
+      "sha256": "bc9f1ea609ead682bdd4d75a2a6e703c86292dbbbc58be0327af64d54fe1a1f6"
+    },
+    {
+      "path": "scripts/configure_auth_env.py",
+      "bytes": 3450,
+      "sha256": "1673f4a9c022a02695a3a64d4bf1d6cbc6acbb6afa9e6bed29c2130e9a3a4df8"
+    },
+    {
+      "path": "tests/test_integrated_entrypoint.py",
+      "bytes": 1946,
+      "sha256": "496133c7990f148c40bef79a394c098eeb2142ade533c6aefb660c3ab97ecd2c"
+    },
+    {
+      "path": "README-FA.md",
+      "bytes": 8766,
+      "sha256": "d596f3412362528c4334a58b6487076e7ca8efe0e46f9b1943926c4caeba0833"
+    }
+  ],
+  "validated": {
+    "python_syntax": true,
+    "static_pytest": "5 passed",
+    "simulated_router_test": "PASS; 130 routes included; legacy unscoped endpoints excluded"
+  },
+  "not_validated": [
+    "real production Docker on user VM",
+    "browser login + cookie + HTTPS",
+    "R2/Salad GPU inference",
+    "GitHub CI regression still has known failure"
+  ]
+}
