@@ -148,6 +148,7 @@ def status(*, group_data=None):
         "auto_gpu_control": os.getenv("DIRECT_GPU_AUTO_CONTROL", "false").lower() == "true" if is_direct else None,
         "hold": direct_queue.load_setting("direct_hold", False) if is_direct else False,
         "name": group.get("name") or configured_group,
+        "image_caching": (group.get("container") or {}).get("image_caching"),
         "status": state.get("status"),
         "pending_change": bool(group.get("pending_change")),
         "replicas": group.get("replicas"),
@@ -361,6 +362,14 @@ def _probe(prefix, path_key):
     }
 
 
+def image_caching_enabled():
+    """Explicit Salad OCI caching policy (new groups default to enabled)."""
+    value = os.environ.get("SALAD_IMAGE_CACHING", "true").strip().lower()
+    if value not in ("true", "false"):
+        raise ValueError("SALAD_IMAGE_CACHING must be true or false")
+    return value == "true"
+
+
 def _new_group_payload(config, gpu_id):
     env = {
         "MANIFEST": os.environ["SALAD_MANIFEST_PATH"],
@@ -398,6 +407,7 @@ def _new_group_payload(config, gpu_id):
             "display_name": config["display_name"],
             "container": {
                 "image": config["image"],
+                "image_caching": image_caching_enabled(),
                 "priority": settings.salad_priority,
                 "resources": {
                     "cpu": _env_int("SALAD_CPU"),
@@ -419,6 +429,7 @@ def _new_group_payload(config, gpu_id):
         "display_name": config["display_name"],
         "container": {
             "image": config["image"],
+            "image_caching": image_caching_enabled(),
             "priority": settings.salad_priority,
             "resources": {
                 "cpu": _env_int("SALAD_CPU"),
@@ -526,9 +537,12 @@ def deploy_draft():
         # Safe in-place image update if the active group is idle and the name
         # and display label have not changed.
         if same_name and same_display and old_group:
-            if (old_group.get("container") or {}).get("image") != desired["image"]:
+            existing_container = old_group.get("container") or {}
+            if (existing_container.get("image") != desired["image"] or
+                    existing_container.get("image_caching") != image_caching_enabled()):
                 _api("PATCH", _group_path(current["group_name"]),
-                     payload={"container": {"image": desired["image"]}})
+                     payload={"container": {"image": desired["image"],
+                                            "image_caching": image_caching_enabled()}})
             _wait_settled(current["group_name"], desired["image"])
             return {"accepted": True, "message": "Existing idle group image updated", 
                     **settings_store.activate(desired)}

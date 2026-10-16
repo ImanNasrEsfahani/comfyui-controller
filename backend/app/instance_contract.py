@@ -329,6 +329,7 @@ def record(data, version, observed_at):
     result = {
         "queue_mode": data.get("queue_mode"), "auto_gpu_control": data.get("auto_gpu_control"),
         "hold": data.get("hold"), "name": group_name, "group_name": group_name,
+        "image_caching": data.get("image_caching"),
         "status": data.get("status"), "provider_status": data.get("status"),
         "pending_change": bool(data.get("pending_change")),
         "desired_replicas": data.get("replicas"), "replicas": data.get("replicas"),

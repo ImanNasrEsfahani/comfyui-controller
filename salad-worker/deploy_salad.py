@@ -72,6 +72,14 @@ WORKER_PORT = integer("SALAD_WORKER_PORT", 1)
 WORKER_SCHEME = required("SALAD_WORKER_SCHEME")
 
 
+def image_caching_enabled():
+    """Explicit Salad OCI caching policy (new groups default to enabled)."""
+    value = os.environ.get("SALAD_IMAGE_CACHING", "true").strip().lower()
+    if value not in ("true", "false"):
+        raise ValueError("SALAD_IMAGE_CACHING must be true or false")
+    return value == "true"
+
+
 def validate_configuration():
     if PRIORITY not in ("high", "medium", "low", "batch"):
         raise SystemExit("SALAD_PRIORITY must be a Salad priority: high, medium, low, batch")
@@ -205,6 +213,7 @@ def group_payload(gpu_id, replicas=None):
         "display_name": GROUP_DISPLAY_NAME,
         "container": {
             "image": IMAGE,
+            "image_caching": image_caching_enabled(),
             "resources": {**RESOURCE_SPEC, "gpu_classes": [gpu_id]},
             "environment_variables": environment_payload(),
             "priority": PRIORITY,
@@ -302,6 +311,8 @@ def config_drift(group, gpu_id):
     actual_resources = container.get("resources") or {}
     if container.get("image") != IMAGE:
         drift.append("image")
+    if container.get("image_caching") != image_caching_enabled():
+        drift.append("container.image_caching")
     if group.get("priority", container.get("priority")) != PRIORITY:
         drift.append("priority")
     for key, value in {**RESOURCE_SPEC, "gpu_classes": [gpu_id]}.items():
@@ -336,6 +347,7 @@ def patch_group(gpu_id):
     desired = {
         "container": {
             "image": IMAGE,
+            "image_caching": image_caching_enabled(),
             "priority": PRIORITY,
             "resources": {**RESOURCE_SPEC, "gpu_classes": [gpu_id]},
             "environment_variables": environment_payload(),
