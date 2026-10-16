@@ -1,0 +1,33 @@
+{
+  "name": "ComfyUI Controller admin-only owner-safe legacy Direct Queue bridge",
+  "base_commit": "db9df9e6e61ebe88f2ce47bc62f8db971609a30a",
+  "source": "read-only GitHub",
+  "tested": "12 offline tests passed; TypeScript JSX parse passed; full CI, Salad, R2 not tested",
+  "production_status": "staging candidate; disabled until explicit operator allowlist and live Worker validation",
+  "files": {
+    "tests/test_owner_direct_bridge.py": {
+      "sha256": "f87c52dba175d493e7620c545b72f2a16ac9fd056884071a44c6220000787d40",
+      "bytes": 12864
+    },
+    "docs/README-FA.md": {
+      "sha256": "1a168b7f16f54883dd6ab693e6fc8a15326944d422034b2a94fa5678c327cf76",
+      "bytes": 11409
+    },
+    "scripts/apply_owner_direct_bridge.py": {
+      "sha256": "965cdd8e0412325974532587a7f6adb65f964bfad27a2ea4e3e79ccc104e0cc8",
+      "bytes": 6424
+    },
+    "scripts/owner_direct_preflight.py": {
+      "sha256": "bbb9c63addd6139db87743e99122c57829c01063cf0124d45f198f1d357dbb42",
+      "bytes": 1727
+    },
+    "backend/app/owner_direct_bridge.py": {
+      "sha256": "aff5aa98d285b83e1df0ea6dc0fcf01ab8859b0f44fcb233b19f28ba2ac0e75a",
+      "bytes": 12106
+    },
+    "frontend/src/pages/legacy-direct/LegacyDirectPanel.jsx": {
+      "sha256": "6996dc158827b27be6ad8f84c573fdd11d01b774431ea95b28707704ea6af5c6",
+      "bytes": 7306
+    }
+  }
+}
