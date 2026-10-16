@@ -23,6 +23,8 @@ TEST_ENV = {
     "SALAD_CONTAINER_GROUP_NAME": "test-group-v1",
     "SALAD_CONTAINER_GROUP_DISPLAY_NAME": "Test Group V1",
     "DIRECT_QUEUE_ENABLED": "false",
+    # Pin the caching policy to make this deployment-contract test deterministic.
+    "SALAD_IMAGE_CACHING": "true",
 }
 
 # The standalone ZIP may be tested without all unchanged repository files.
@@ -102,8 +104,10 @@ class StoreTests(unittest.TestCase):
             result = salad_control.deploy_draft()
         self.assertTrue(result["accepted"])
         self.assertEqual(result["active"]["image"], "ghcr.io/test/worker:v2")
+        # Cache is deliberately included in the provider PATCH after the cold-start fix.
         api.assert_called_once_with("PATCH", salad_control._group_path("test-group-v1"),
-                                    payload={"container": {"image": "ghcr.io/test/worker:v2"}})
+                                    payload={"container": {"image": "ghcr.io/test/worker:v2",
+                                                           "image_caching": True}})
 
     def test_name_conflict_allocates_unique_group_and_preserves_old(self):
         desired = {"image": "ghcr.io/test/worker:v2", "group_name": "test-group-v2",

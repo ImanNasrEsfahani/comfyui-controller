@@ -1,0 +1,16 @@
+{
+  "source_git_commit": "eadd62788446ce20a1ce155ad0c1b7267a749159",
+  "reason": "CI Assertion expected legacy PATCH without image_caching",
+  "files": {
+    "tests/test_settings_migration.py": {
+      "sha256": "10890ba1aece16dbb2c2a83591a447d738afb7932b2a99744d2e0f84784f1556",
+      "bytes": 7737
+    }
+  },
+  "offline_checks": [
+    "py_compile pass",
+    "mock payload contract pass",
+    "prior patch test suite 9 pass"
+  ],
+  "full_CI_verified": false
+}
