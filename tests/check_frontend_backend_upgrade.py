@@ -170,15 +170,22 @@ class ControllerTests(unittest.TestCase):
                 return {"instances": [{"id": "instance1", "state": "running", "ready": True,
                                         "secret_field": "DO_NOT_LEAK"}]}
             if method == "GET": return group
-            return {}
-        with patch.object(salad_control, "request", side_effect=fake_request) as request:
+            raise AssertionError("Unexpected legacy request method: " + method)
+        # A provider state GET and an operation POST now use different entrypoints.
+        # Mock both explicitly: no real Salad call and no fake 'confirmed stopped'.
+        with patch.object(salad_control, "request", side_effect=fake_request), \
+             patch.object(salad_control, "_provider_call", return_value=202) as provider:
             data = self.client.get("/api/salad/instances", headers=ADMIN)
             self.assertEqual(data.status_code, 200)
             self.assertNotIn("DO_NOT_LEAK", data.text)
             self.assertEqual(data.json()["instances"][0]["state"], "running")
             self.assertEqual(self.client.post("/api/salad/stop").status_code, 401)
-            self.assertEqual(self.client.post("/api/salad/stop", headers=ADMIN).status_code, 200)
-            self.assertTrue(any(c.args[:2] == ("POST", "/stop") for c in request.call_args_list))
+            result = self.client.post("/api/salad/stop", headers=ADMIN)
+            self.assertEqual(result.status_code, 200, result.text)
+            # A 202 from the provider means request accepted, NOT stopped.
+            self.assertTrue(result.json().get("pending"))
+            self.assertEqual(result.json().get("status"), "awaiting_confirmation")
+            provider.assert_called_once_with("POST", "/stop", json_body=None)
 
     def test_stop_denied_during_pending_change(self):
         with patch.object(salad_control, "request", return_value={"pending_change": True}):

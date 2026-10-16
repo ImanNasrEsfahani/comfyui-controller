@@ -1,0 +1,35 @@
+{
+  "title": "ComfyUI Controller offline CI and draft registry repair",
+  "source_revision": "ed16f25b5504fda266cdca894bb352c8b4c82b3d",
+  "github_access": "READ ONLY",
+  "last_ci_run": "38189155070",
+  "local_validation": "10 passed (test_ci_fixture_fixes and test_model_onboarding_repair); provider and whole-repo builds untested",
+  "not_implemented": "Trusted runtime attestation, real Salad model loading, model ready publication, owner-safe Generate",
+  "files": {
+    "tests/check_frontend_backend_upgrade.py": {
+      "mode": "replace",
+      "sha256": "14ab8d5f452547fead35069cf4e4e788a136e157c6b6b311f3c4e19515e2e66a",
+      "bytes": 11440
+    },
+    "scripts/ci_fixture_fixes.py": {
+      "mode": "replace",
+      "sha256": "ddd226b1d730bd8839c8b7aa3f713549cbb861cf1463a00c9110897d10176bac",
+      "bytes": 6656
+    },
+    "scripts/model_onboarding.py": {
+      "mode": "new",
+      "sha256": "61f9151718772f120afc81c44f70a846cf58caeba9326f6d870805693dd7071b",
+      "bytes": 14424
+    },
+    "tests/test_model_onboarding_repair.py": {
+      "mode": "new",
+      "sha256": "6c3da460bf8e84d467a14535d0af8db0599dace57b19f87cb0f609f802a68823",
+      "bytes": 4691
+    },
+    "docs/registry-repair/README-FA.md": {
+      "mode": "new",
+      "sha256": "e2715be05a0f4fe5e679b65298a0dbe1f03d75809d625a93ec42a9732c303e07",
+      "bytes": 8561
+    }
+  }
+}
