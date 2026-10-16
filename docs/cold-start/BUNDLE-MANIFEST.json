@@ -1,0 +1,15 @@
+{
+  "bundle": "Salad Qwen cold-start image caching and diagnostics",
+  "source_repository": "ImanNasrEsfahani/comfyui-controller",
+  "source_branch": "main",
+  "built_on": "2026-10-16",
+  "notes": "Zip is an overlay with a guarded local patcher; no cloud changes; see docs/cold-start/README-FA.md",
+  "files": {
+    "docs/cold-start/README-FA.md": "1ff43331622d70b8efc0ee6d3f00591eae0faaa86168190759efd40f6a4619df",
+    "docs/cold-start/TEST-REPORT.txt": "1c3f241d05d8688d2edbbd32595cb7c51db69f9cc7e212ad78c4be38748e2e96",
+    "salad-worker/start.sh": "bb8e912bf91da2e6381a36a53650ad54eb18884a731d1613c0140fe93fbdd9ea",
+    "scripts/apply_salad_coldstart.py": "8b721f41f3c88af44aac7de21a20c260f3aface5e8e4cce419b067c2e6798dec",
+    "scripts/salad_cold_start_audit.py": "983fd8b861330000900181fd5f052b984d34ef0bc6e6c3a9e97b5a91b7b150c9",
+    "tests/test_salad_coldstart_patch.py": "35438f99aa7bd0aa2e2ae1b784ece5125f8e1faaab66680c68a909b6536398ec"
+  }
+}

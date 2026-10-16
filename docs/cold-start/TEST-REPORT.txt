@@ -1,0 +1,13 @@
+ComfyUI Controller — Salad Cold-start PATCH (offline evidence)
+Date: 2026-10-16
+Source: GitHub main, read-only analysis
+Scope: explicit image_caching, worker startup stage instrumentation, safe cache audit CLI
+
+PASS: 9 unit tests in tests/test_salad_coldstart_patch.py
+PASS: python3 -m py_compile scripts/*.py
+PASS: bash -n salad-worker/start.sh
+NOT RUN: full GitHub repository CI / production Salad GPU / Docker build
+NOT RUN: live Salad API group update or live instance restart
+
+This patch does not quantize Qwen or replace its pinned FP8 model/encoder.
+This patch does not guarantee a sub-minute or otherwise fixed Cold Start.
