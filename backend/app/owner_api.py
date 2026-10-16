@@ -16,6 +16,8 @@ from fastapi.responses import StreamingResponse
 from PIL import Image, UnidentifiedImageError
 
 from . import db, security, storage, owner_repository as owners
+from .contracts import JobIn
+from . import owner_direct_bridge as direct_bridge
 from .config import settings
 
 
@@ -94,6 +96,8 @@ def history(limit:int=24,state:str|None=None,workflow_id:str|None=None,
 def request_lookup(client_request_id:str,user=user_dep):
     with db.connect() as c:
         row=owners.job_for_request(c,user['user_id'],client_request_id)
+        if row is None:
+            row=direct_bridge.lookup_by_client_key(user['user_id'],client_request_id)
         if row is None:denial()
         return output(row,c,user['user_id'])
 
@@ -219,12 +223,23 @@ def retry(local_id:str,request:Request,user=user_dep):
     raise HTTPException(503,'Owner-safe retry is not yet enabled')
 
 
+@router.get('/legacy-direct/workflows')
+def legacy_direct_workflows(user=user_dep):
+    return direct_bridge.workflow_catalog(user)
+
+
 @router.post('/jobs')
-def generate(request:Request,user=user_dep):
+def generate(request:Request,body:JobIn,user=user_dep):
     security.require_csrf(request)
-    # Legacy db.create_job() still has global request-key lookup and may race
-    # Worker claim before owner is saved. Never submit an ownerless GPU Job.
-    raise HTTPException(503,'Owner-safe job submission is not yet enabled')
+    # Atomic owner is inserted before this Job becomes claimable; the legacy
+    # non-owner-aware submit_job helper is never called.
+    try:
+        return direct_bridge.submit(user, body)
+    except Exception as exc:
+        from .contracts import ContractError
+        if isinstance(exc,ContractError):
+            raise HTTPException(exc.status,str(exc)) from exc
+        raise
 
 
 @router.post('/uploads')

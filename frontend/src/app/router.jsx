@@ -10,6 +10,7 @@ import {AdminOverview,AdminUsers,AdminUserDetail,AdminAudit} from '../pages/Phas
 import {PrivateLibrary,PrivateAssetDetail,ReferenceDraftPanel} from '../pages/library/PrivateLibrary.jsx';
 import {Phase06JobDetails} from '../pages/library/Phase06Jobs.jsx';
 import {ParameterStudio,PresetsPage} from '../pages/parameters/ParameterPages.jsx';
+import {LegacyDirectPanel} from '../pages/legacy-direct/LegacyDirectPanel.jsx';
 import {ToolsCatalog,ModelDetails,AdminModels,AdminWorkerImages,AdminDeploymentProfiles} from '../pages/registry/RegistryPages.jsx';
 import {WorkflowStudio,WorkflowList,WorkflowVersions} from '../pages/workflows/WorkflowPages.jsx';
 import {StudioEditor,StudioVersions} from '../pages/workflows/StudioV2.jsx';
@@ -68,7 +69,7 @@ function Page(){
   else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<Phase06JobDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/library'){title='کتابخانه';node=<PrivateLibrary/>;}
   else if(route.path.startsWith('/library/')){title='جزئیات فایل';node=<PrivateAssetDetail id={route.path.split('/')[2]}/>;}
-  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><ParameterStudio/><ReferenceDraftPanel/></>;}
+  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><LegacyDirectPanel/><ParameterStudio/><ReferenceDraftPanel/></>;}
   else if(route.path==='/account/security'){title='امنیت حساب';node=<><AccountSecurityPage/><AccountSecurityExtras/></>;}
   else if(route.path==='/account/profile'){title='پروفایل';node=<ProfilePage/>;}
   else if(route.path==='/account/preferences'){title='ترجیحات';node=<PreferencesPage/>;}

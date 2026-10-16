@@ -194,9 +194,23 @@ def provider_attempt(c, job_id, output_prefix=None):
 
 
 def save_assets(c, assets):
+    # Worker metadata never decides ownership. Legacy databases without
+    # identity columns must continue to function during offline migration.
+    job_cols = {r['name'] for r in c.execute('PRAGMA table_info(jobs)')}
+    asset_cols = {r['name'] for r in c.execute('PRAGMA table_info(job_assets)')}
+    has_owner = {'owner_user_id','ownership_state'} <= job_cols and                 {'owner_user_id','ownership_state'} <= asset_cols
     for asset in assets:
-        fields = list(asset)
-        c.execute("INSERT INTO job_assets(" + ",".join(fields) + ") VALUES (" + ",".join("?" for _ in fields) + ") ON CONFLICT(job_id,storage_key) DO NOTHING", list(asset.values()))
+        record = {key:value for key,value in asset.items() if key not in ('owner_user_id','ownership_state')}
+        if has_owner:
+            parent = c.execute('SELECT owner_user_id,ownership_state FROM jobs WHERE id=?',
+                               (record['job_id'],)).fetchone()
+            if not parent:
+                raise ValueError('Output parent Job was not found')
+            record['owner_user_id'] = parent['owner_user_id']
+            record['ownership_state'] = ('verified' if parent['owner_user_id']
+                                         and parent['ownership_state']=='verified' else 'unclaimed')
+        fields = list(record)
+        c.execute("INSERT INTO job_assets(" + ",".join(fields) + ") VALUES (" + ",".join("?" for _ in fields) + ") ON CONFLICT(job_id,storage_key) DO NOTHING", list(record.values()))
 
 
 def asset_for_storage_key(c, storage_key):
