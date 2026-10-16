@@ -64,7 +64,7 @@ def rig(tmp_path,monkeypatch):
     sys.modules[package+'.contracts']=mock_contract
     sys.modules[package+'.direct_queue']=SimpleNamespace(enabled=lambda:True)
     sys.modules[package+'.owner_repository']=owner_repo
-    sys.modules[package+'.settings_store']=SimpleNamespace(active=lambda:{'image':'ghcr.io/owner/worker:fp8'})
+    sys.modules[package+'.settings_store']=SimpleNamespace(active=lambda:{'image':'ghcr.io/owner/worker:fp8','group_name':'my-gpu-group'})
     sys.modules[package+'.config']=SimpleNamespace(settings=SimpleNamespace(r2_bucket='private-bucket',salad_priority='medium'))
     sys.modules[package+'.template']=SimpleNamespace(render_template=lambda graph,variables:graph)
     spec=importlib.util.spec_from_file_location(package+'.owner_direct_bridge',ROOT/'backend/app/owner_direct_bridge.py')
@@ -99,17 +99,17 @@ def test_catalog_exposes_unverified_and_pinned_fields(rig):
     assert row['model_files']==['Qwen_Image_fp8.safetensors']
     assert row['fields']==[{'key':'prompt.user','type':'text'}]
 
-def test_admin_only_and_default_disabled(rig):
-    with pytest.raises(HTTPException) as error:rig.bridge.workflow_catalog(VISITOR)
-    assert error.value.status_code==403
+def test_every_signed_in_user_can_use_workflows_without_approvals(rig):
+    assert rig.bridge.workflow_catalog(VISITOR)['items'][0]['can_submit']
     rig.monkeypatch.delenv('OWNER_DIRECT_JOB_ENABLED')
-    assert not rig.bridge.workflow_catalog(ADMIN)['items'][0]['can_submit']
-    with pytest.raises(HTTPException) as error:rig.bridge.submit(ADMIN,body())
-    assert error.value.status_code==503
+    rig.monkeypatch.delenv('OWNER_DIRECT_ALLOWLIST')
+    rig.monkeypatch.delenv('OWNER_DIRECT_IMAGE')
+    assert rig.bridge.workflow_catalog(VISITOR)['items'][0]['can_submit']
+    assert rig.bridge.submit(VISITOR,body())['state']=='pending'
 
 def test_rejects_changed_workflow_without_inserting(rig):
     with rig.conn() as c:c.execute("UPDATE workflows SET api_prompt='{}' WHERE id='w1'")
-    with pytest.raises(HTTPException) as error:rig.bridge.submit(ADMIN,body())
+    with pytest.raises(HTTPException) as error:rig.bridge.submit(ADMIN,body(workflow_version=rig.sha))
     assert error.value.status_code==409
     with rig.conn() as c:assert c.execute('SELECT count(*) FROM jobs').fetchone()[0]==0
 
@@ -145,14 +145,13 @@ def test_image_reference_owner_enforced(rig):
         with pytest.raises(HTTPException):rig.bridge.resolve_references(c,'u1',{key:'https://example.com/private'})
         with pytest.raises(HTTPException):rig.bridge.resolve_references(c,'u1',{key:'s3://private-bucket/inputs/other/image.png'})
 
-def test_direct_pin_and_operator_image_must_match(rig):
+def test_image_pin_and_manual_approval_have_no_effect(rig):
     rig.monkeypatch.setenv('OWNER_DIRECT_IMAGE','ghcr.io/evil/worker:other')
-    with pytest.raises(HTTPException) as e:rig.bridge.submit(ADMIN,body())
-    assert e.value.status_code==503
-    rig.monkeypatch.setenv('OWNER_DIRECT_IMAGE','ghcr.io/owner/worker:fp8')
     rig.monkeypatch.setenv('OWNER_DIRECT_ALLOWLIST','w1@'+'0'*64)
-    with pytest.raises(HTTPException) as e:rig.bridge.submit(ADMIN,body())
-    assert e.value.status_code==409
+    assert rig.bridge.submit(VISITOR,body())['state']=='pending'
+    with pytest.raises(HTTPException) as error:
+        rig.bridge.submit(VISITOR,body(client_request_id='other',workflow_version='0'*64))
+    assert error.value.status_code==409
 
 def test_lookup_owner_isolation(rig):
     saved=rig.bridge.submit(ADMIN,body())

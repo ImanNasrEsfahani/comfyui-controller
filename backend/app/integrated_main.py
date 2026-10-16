@@ -1,10 +1,8 @@
-"""Production entrypoint for the integrated, owner-scoped UI (Phase 02–13).
+"""Production integrated entrypoint; owner-scoped APIs take precedence.
 
-Preserve the original app.main for the legacy scheduler/worker implementation,
-but do NOT expose its global, unscoped user/job APIs under the new multi-user UI.
-No GPU feature is implicitly activated; all new routers retain their own gates.
-
-Use: uvicorn app.integrated_main:app --host 0.0.0.0 --port 8000
+Legacy unscoped jobs and assets APIs remain inaccessible from browser sessions.
+The authenticated self-service GPU router is intentionally enabled for every
+active account; underlying single-group operations still enforce job safety.
 """
 from __future__ import annotations
 
@@ -21,16 +19,15 @@ from .workflow_api import router as workflow_router
 from .worker_v11_api import router as worker_v11_router
 from .scheduler_v12_api import router as scheduler_v12_router
 from .video_api import router as video_v13_router
+from .gpu_self_service import router as gpu_self_service_router
 
-# ORDER IS SECURITY-RELEVANT: auth first; Phase06 media before Phase03 owner.
-# Legacy /api/jobs, /api/assets, /api/uploads etc. MUST NOT remain reachable:
-# they are single-operator APIs, not owner-bound. Preserve token-guarded legacy
-# Worker, Direct Queue and Salad control endpoints for compatibility only.
+# Auth first; media and owner-scoped routes before old legacy API routes.
 ROUTERS = (
     auth_router,
     media_router,
     owner_router,
     account_router,
+    gpu_self_service_router,
     registry_router,
     parameters_router,
     workflow_router,
@@ -51,20 +48,16 @@ def _route_identity(route):
 def _install_once():
     if getattr(app.state, 'integrated_owner_api', False):
         return
-
     previous = tuple(app.router.routes)
     if not any(getattr(route, 'path', '') == '/health' for route in previous):
         raise RuntimeError('Expected Controller app.main baseline is unavailable')
 
-    # Importing modules should not start workers or alter the provider.
     for router in ROUTERS:
         app.include_router(router)
     appended = tuple(app.router.routes[len(previous):])
     if not appended:
         raise RuntimeError('Router integration produced no routes')
 
-    # Skip only exact duplicate methods. A new router must not leave an old
-    # endpoint silently shadowing a session-bound endpoint.
     new_routes = []
     keys = set()
     duplicates = []
@@ -76,17 +69,14 @@ def _install_once():
         keys.add(identity)
         new_routes.append(route)
 
-    # Legacy API paths not on this explicit allowlist are not safe to expose
-    # to a multi-user frontend. The original legacy app remains importable,
-    # but its global jobs/assets/workflow endpoints are no longer HTTP routes.
     def keep_legacy(route):
         path = getattr(route, 'path', '')
         if not path.startswith('/api/'):
             return True
         return any(path.startswith(prefix) for prefix in (
-            '/api/worker/',   # separate worker credential
-            '/api/direct/',   # separate admin/worker credentials
-            '/api/salad/',    # separate internal admin credential
+            '/api/worker/',   # dedicated Worker credential
+            '/api/direct/',   # dedicated internal credential
+            '/api/salad/',    # dedicated internal credential
         ))
 
     legacy_routes = []
@@ -106,6 +96,9 @@ def _install_once():
         ('/api/jobs', 'GET'),
         ('/api/jobs', 'POST'),
         ('/api/users/me', 'GET'),
+        ('/api/self-service/gpu', 'GET'),
+        ('/api/self-service/gpu/{action}', 'POST'),
+        ('/api/legacy-direct/workflows', 'GET'),
         ('/api/v2/semantic-workflows', 'GET'),
         ('/api/v2/worker/claim', 'POST'),
         ('/api/v2/video/models', 'GET'),

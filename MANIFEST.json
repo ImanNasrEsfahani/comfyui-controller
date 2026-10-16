@@ -1,8 +1,43 @@
 {
-  "baseline_commit": "5f51b5f1fe3d3289c207631be8200f04a4654993",
-  "original_git_blob_sha1": "c2bd9000debe3e0a880e1ec6b8ea95949a57f7fd",
-  "replaced_path": "tests/test_phase03_owner.py",
-  "replacement_sha256": "1278afa99e5754c569b1708c9a168c47a3ae030fc7833321036a7c36b139df70",
-  "changed_only": "test_17_generation_fails_closed",
-  "verified_tests": "12 owner_direct_bridge tests passed; full Phase03 not run"
+  "source_commit": "7af8124a08faf98160b9fc31b5bd9757df946e98",
+  "full_file_replacements": true,
+  "offline_tests_passed": 21,
+  "files": {
+    "backend/app/owner_direct_bridge.py": {
+      "sha256": "f4f5e4a807ea1f86e3de7b6f88a4e0f1abfd3d25072868442e7b85de92fc0fd7",
+      "size": 10766
+    },
+    "backend/app/gpu_self_service.py": {
+      "sha256": "bb6e20c1b6937ee837998366bc4352b2640042574aeee7b5b1518717b6d0cf3d",
+      "size": 4381
+    },
+    "backend/app/integrated_main.py": {
+      "sha256": "eb6cdcf3cefbba1348db09d0fd65e94f8e1eca400c557dfd8a6a27cc85d56354",
+      "size": 4000
+    },
+    "frontend/src/pages/legacy-direct/LegacyDirectPanel.jsx": {
+      "sha256": "6c2739426c24ea4dea5c811346de84f2f5078426114a2d4349d056de73b03267",
+      "size": 11550
+    },
+    "frontend/src/app/router.jsx": {
+      "sha256": "1d9ed442297dbae4b03084c5b75fb71aa22f298d4158fbadc738bdbcc3df9808",
+      "size": 7564
+    },
+    "tests/test_owner_direct_bridge.py": {
+      "sha256": "2536c7f01ac622edd12def4b492ae6bc59223887e7b22f22d34794a742a49362",
+      "size": 12887
+    },
+    "tests/test_phase03_owner.py": {
+      "sha256": "c736887e39c41ecef223f8179b02dda2077e3383f027d0d795e81d3b16d2310c",
+      "size": 12639
+    },
+    "tests/test_gpu_self_service.py": {
+      "sha256": "f0eede51139955cfc9030ff49a28f70e9d24e1b9c575c31eb8bcc7987d7c11c4",
+      "size": 5764
+    },
+    "README-FA.md": {
+      "sha256": "8497536741e614fe4347860f1783d8b30e6bd2e101f8cd10cacc4cee657bdf23",
+      "size": 6637
+    }
+  }
 }

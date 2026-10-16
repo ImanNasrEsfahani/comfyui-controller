@@ -184,25 +184,15 @@ class OwnerHTTP(unittest.TestCase):
   self.assertEqual(self.t(self.cb,'post','/api/jobs/a-job-3/retry',self.csrf_b).status_code,404)
   self.assertEqual(self.t(self.ca,'post','/api/jobs/a-job-3/retry',self.csrf_a).status_code,503)
 
- def test_17_generation_requires_admin_and_stays_disabled_without_opt_in(self):
-  # Phase03's former unconditional 503 was superseded by the explicitly gated
-  # owner-safe Direct Queue bridge. A normal user must now get HTTP 403 even
-  # when the queue remains disabled: denying authorization is fail-closed.
+ def test_17_generation_uses_login_and_fails_when_queue_disabled(self):
+  # Ordinary authenticated accounts need no administrator role. The offline
+  # Phase03 fixture does not enable Direct Queue, so it still fails closed.
   payload={'workflow_id':'w','client_request_id':'offline-phase03-1','variables':{}}
-  user=self.t(self.ca,'post','/api/jobs',self.csrf_a,json=payload)
-  self.assertEqual(user.status_code,403,user.text)
-  self.assertIn('Administrator role required',user.text)
-
-  # Grant the administrator role through the actual test database (not forged
-  # request headers). The feature flag must still block GPU submission with 503.
-  with db.connect() as c:
-   c.execute('INSERT INTO user_roles(user_id,role_id,granted_at) VALUES (?,?,?)',
-             (self.a,'admin',security.iso()))
-  with patch.dict(os.environ,{'OWNER_DIRECT_JOB_ENABLED':'false'}):
-   admin=self.t(self.ca,'post','/api/jobs',self.csrf_a,json=payload)
-  self.assertEqual(admin.status_code,503,admin.text)
-  self.assertIn('disabled',admin.text)
-  # Neither rejected request is allowed to enqueue a new job.
+  with patch.dict(os.environ,{'DIRECT_QUEUE_ENABLED':'false'}):
+   user=self.t(self.ca,'post','/api/jobs',self.csrf_a,json=payload)
+   self.assertEqual(user.status_code,503,user.text)
+   other=self.t(self.cb,'post','/api/jobs',self.csrf_b,json=payload)
+   self.assertEqual(other.status_code,503,other.text)
   with db.connect() as c:
    self.assertEqual(c.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],8)
 

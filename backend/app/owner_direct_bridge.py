@@ -1,8 +1,7 @@
-"""Owner-transactional, explicitly allowlisted legacy Direct Queue bridge.
+"""Owner-scoped, zero-approval workflow runner over the existing Direct Queue.
 
-NOT a Phase07 verified-model catalog or a replacement for signed v11 claims.
-Operator must separately establish compatibility with the deployed Worker.
-Never exposed to non-admin users. No network calls during admission.
+All authenticated users may submit saved workflows. The exact graph hash is
+checked again inside the admission transaction. This is NOT runtime attestation.
 """
 from __future__ import annotations
 
@@ -18,50 +17,20 @@ from . import db, contracts, direct_queue, owner_repository, settings_store
 from .config import settings
 from .template import render_template
 
-ALLOWED = re.compile(r'^[A-Za-z0-9_.:-]{1,80}@[a-f0-9]{64}$')
-SHA = re.compile(r'^[a-f0-9]{64}$')
 REFERENCE = re.compile(r'^input\.image_[0-9]+$')
 NUMBER = re.compile(r'(seed|steps|width|height|count)$', re.I)
 DECIMAL = re.compile(r'(cfg|denoise|strength(?:_(?:model|clip))?|(?:model|clip)_strength)$', re.I)
 LOADER_KEYS = ('ckpt_name', 'unet_name', 'vae_name', 'clip_name')
 
 
-def require_operator(actor):
-    if not ({'admin', 'superadmin'} & set(actor.get('roles', ()) or ())):
-        raise HTTPException(403, 'Administrator role required for legacy Direct Queue')
-
-
-def allowlist():
-    raw = os.environ.get('OWNER_DIRECT_ALLOWLIST', '').strip()
-    if not raw:
-        return {}
-    parts = [p.strip() for p in raw.split(',')]
-    if len(parts) > 32 or any(not ALLOWED.fullmatch(part) for part in parts):
-        raise HTTPException(503, 'Invalid OWNER_DIRECT_ALLOWLIST configuration')
-    mapping = {}
-    for part in parts:
-        ident, checksum = part.rsplit('@', 1)
-        if ident in mapping and mapping[ident] != checksum:
-            raise HTTPException(503, 'Conflicting workflow pins')
-        mapping[ident] = checksum
-    return mapping
-
-
-def configured():
-    return os.environ.get('OWNER_DIRECT_JOB_ENABLED', 'false').lower() == 'true'
-
-
 def ready_for_admission():
-    if not configured() or not direct_queue.enabled():
-        return False
-    # The deployment identity is an explicit operator policy, not proof that
-    # model weights inside the Worker are loaded or compatible.
-    expected_image = os.environ.get('OWNER_DIRECT_IMAGE', '').strip()
-    if not expected_image:
+    """Direct Queue must be configured; no user approval, SHA pin, or manual flags."""
+    if not direct_queue.enabled():
         return False
     try:
-        return settings_store.active().get('image') == expected_image
-    except Exception:
+        active = settings_store.active()
+        return bool(active.get('image') and active.get('group_name'))
+    except (KeyError, RuntimeError, ValueError):
         return False
 
 
@@ -98,8 +67,6 @@ def field_type(key):
 
 
 def workflow_catalog(actor):
-    require_operator(actor)
-    pinned = allowlist()
     permitted = ready_for_admission()
     with db.connect() as c:
         rows = c.execute('SELECT id,name,api_prompt FROM workflows ORDER BY updated_at DESC LIMIT 100').fetchall()
@@ -112,14 +79,14 @@ def workflow_catalog(actor):
             revision = contracts.digest(graph)
             names = observed_models(graph)
             fields = [{'key':key, 'type':field_type(key)} for key in contracts.placeholders(graph)]
-            allowed = pinned.get(row['id']) == revision and permitted
+            allowed = permitted
             items.append({'id':row['id'], 'name':row['name'], 'graph_sha256':revision,
                           'model_files':names, 'fields':fields, 'can_submit':allowed,
                           'readiness':'unverified', 'model_approval':'not_asserted'})
         except (ValueError, TypeError):
             continue
     return {'items':items, 'operator_enabled':permitted,
-            'note':'Legacy workflow metadata only; not a verified model registry. Pin workflow SHA and deploy image explicitly before submission.'}
+            'note':'Saved workflows are selectable by signed-in users. Model files and runtime compatibility have not been independently verified.'}
 
 
 def _reference_owner(c, uid, key):
@@ -181,14 +148,10 @@ def _owner_key(uid, key):
 
 
 def submit(actor, body):
-    require_operator(actor)
     if not ready_for_admission():
-        raise HTTPException(503, 'Owner Direct Queue is disabled or deployed Image does not match operator pin')
+        raise HTTPException(503, 'Direct Queue is disabled or the active worker is not configured')
     if not body.client_request_id:
         raise HTTPException(422, 'client_request_id is required for idempotency')
-    pinned = allowlist()
-    if body.workflow_id not in pinned:
-        raise HTTPException(403, 'Workflow is not explicitly allowlisted')
     if len(json.dumps(body.variables)) > 30000:
         raise HTTPException(413, 'Input payload too large')
     uid = actor['user_id']
@@ -211,8 +174,10 @@ def submit(actor, body):
         if not wf:
             raise HTTPException(404, 'Workflow does not exist')
         graph = json.loads(wf['api_prompt'])
-        if not isinstance(graph, dict) or len(graph) > 1000 or contracts.digest(graph) != pinned[body.workflow_id]:
-            raise HTTPException(409, 'Workflow graph changed; re-approve exact SHA256')
+        if not isinstance(graph, dict) or len(graph) > 1000:
+            raise HTTPException(409, 'Invalid saved workflow graph')
+        if body.workflow_version and contracts.digest(graph) != body.workflow_version:
+            raise HTTPException(409, 'Workflow changed; reload the latest form')
         workflow = {'id': wf['id'], 'name': wf['name'], 'api_prompt':graph,
                     'ui_workflow':None,
                     'capability_spec':json.loads(wf['capabilities_json']) if wf['capabilities_json'] else None}

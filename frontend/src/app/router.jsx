@@ -17,7 +17,6 @@ import {StudioEditor,StudioVersions} from '../pages/workflows/StudioV2.jsx';
 import {UsagePage,InfrastructurePage} from '../pages/scheduling/SchedulingPages.jsx';
 import {VideoCreatePage,VideoEditPage} from '../pages/video/VideoPages.jsx';
 
-// Legacy Controller remains untouched and is the DEFAULT until an operator explicitly opts in.
 const LegacyApp=lazy(()=>import('../App.jsx'));
 const ENABLED=import.meta.env.VITE_AUTH_UI_ENABLED==='true';
 const STUDIO_ENABLED=import.meta.env.VITE_WORKFLOW_STUDIO_ENABLED==='true';
@@ -69,7 +68,7 @@ function Page(){
   else if(route.path.startsWith('/jobs/')){title='جزئیات کار';node=<Phase06JobDetails id={route.path.split('/')[2]}/>;}
   else if(route.path==='/library'){title='کتابخانه';node=<PrivateLibrary/>;}
   else if(route.path.startsWith('/library/')){title='جزئیات فایل';node=<PrivateAssetDetail id={route.path.split('/')[2]}/>;}
-  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<><LegacyDirectPanel/><ParameterStudio/><ReferenceDraftPanel/></>;}
+  else if(route.path==='/create/image'||route.path==='/edit/image'){title='ساخت و ویرایش';node=<LegacyDirectPanel/>;}
   else if(route.path==='/account/security'){title='امنیت حساب';node=<><AccountSecurityPage/><AccountSecurityExtras/></>;}
   else if(route.path==='/account/profile'){title='پروفایل';node=<ProfilePage/>;}
   else if(route.path==='/account/preferences'){title='ترجیحات';node=<PreferencesPage/>;}
