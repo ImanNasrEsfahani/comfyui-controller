@@ -99,6 +99,23 @@ class WorkerCancellation(unittest.TestCase):
         self.assertIn('model_parts.py verify',docker)
         self.assertIn('SCAIL2_BAKE_MODE',docker)
 
+class CIBuildPrerequisites(unittest.TestCase):
+    def test_both_build_variants_prepare_ffmpeg_and_ffprobe(self):
+        workflow=(ROOT/'.github/workflows/build-scail2-worker.yml').read_text()
+        script=ROOT/'scripts/ensure_scail2_ffmpeg.sh'
+        self.assertEqual(workflow.count('run: bash scripts/ensure_scail2_ffmpeg.sh'), 2)
+        self.assertEqual(workflow.count('name: Ensure FFmpeg and FFprobe for media tests'), 2)
+        self.assertIn("'scripts/ensure_scail2_ffmpeg.sh'", workflow)
+        sh=script.read_text()
+        self.assertIn('apt-get install -y --no-install-recommends ffmpeg',sh)
+        self.assertIn('for binary in ffmpeg ffprobe',sh)
+        subprocess=__import__('subprocess')
+        subprocess.run(['bash','-n',str(script)],check=True)
+        # On the local runner, the existing binary path must not run apt-get.
+        if shutil.which('ffmpeg') and shutil.which('ffprobe'):
+            subprocess.run(['bash',str(script)],check=True,stdout=subprocess.DEVNULL)
+
+
 class OptionalDependencyIsolation(unittest.TestCase):
     def test_offline_import_does_not_require_huggingface_hub(self):
         """Reproduce the GitHub python-and-worker collection environment.
