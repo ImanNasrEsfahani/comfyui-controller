@@ -22,16 +22,16 @@ async function request(path,{method='GET',body,csrf,signal}={}){
 }
 
 function UploadCard({label,kind,file,onFile,meta,loading,onUpload}){
- const accept=kind==='video'?'video/mp4,video/webm':'image/jpeg,image/png,image/webp';
+ const accept=kind==='video'?'video/*,.mkv,.avi,.mov,.mxf,.mts,.m2ts,.flv,.wmv,.ogv,.vob,.ts,.mpg,.mpeg':'image/jpeg,image/png,image/webp';
  return <div className="cr-upload"><label className="cr-heading">{label}</label>
   <label className="cr-filebox"><span aria-hidden="true">{kind==='video'?'▣':'▧'}</span>
    <strong>{file?.name || 'فایل را انتخاب کنید'}</strong>
-   <small>{kind==='video'?'MP4 / WebM — حداکثر ۱۰ ثانیه و ۹۰ مگابایت':'PNG / JPG / WebP — چهره و بدن واضح'}</small>
+   <small>{kind==='video'?'فرمت‌های ویدئویی قابل‌خواندن با FFmpeg · پردازش طولانی به‌صورت بخش‌بخش':'PNG / JPG / WebP — چهره و بدن واضح'}</small>
    <input type="file" accept={accept} onChange={e=>onFile(e.target.files?.[0]||null)} aria-label={label}/></label>
   {kind==='video'&&file&&<p className="cr-hint">ویدئوی اصلی باید یک شخص هدف واضح داشته باشد.</p>}
   <div className="cr-inline"><button type="button" disabled={!file||loading} onClick={onUpload}>
     {loading?'در حال انتقال…':meta?'جایگزینی فایل':'آپلود فایل'}</button>
-   {meta&&<span className="cr-ok">✓ آماده · {meta.width} × {meta.height}</span>}</div>
+   {meta&&<span className="cr-ok">✓ آماده{meta.width&&meta.height?` · ${meta.width} × ${meta.height}`:''}</span>}</div>
  </div>
 }
 
@@ -40,7 +40,7 @@ export function CharacterReplacementPage(){
  const [config,setConfig]=useState(null),[configError,setConfigError]=useState('');
  const [form,setForm]=useState(DEFAULTS),[files,setFiles]=useState({video:null,reference:null});
  const [assets,setAssets]=useState({video:null,reference:null});
- const [uploading,setUploading]=useState(''),[submitting,setSubmitting]=useState(false);
+ const [uploading,setUploading]=useState(''),[uploadProgress,setUploadProgress]=useState(0),[submitting,setSubmitting]=useState(false);
  const [jobs,setJobs]=useState([]),[error,setError]=useState(''),[success,setSuccess]=useState('');
  const keyRef=useRef(null),urls=useRef([]),uploadVersions=useRef({video:0,reference:0});
  const [preview,setPreview]=useState({video:null,reference:null});
@@ -65,13 +65,46 @@ export function CharacterReplacementPage(){
  }
  async function upload(kind){const file=files[kind];if(!file)return;
   const version=uploadVersions.current[kind];
-  setUploading(kind);setError('');setSuccess('');
-  try{const csrf=await mutationToken(),body=new FormData();body.append('file',file);
-   const response=await request('/assets/'+kind,{method:'POST',body,csrf});
-   if(version===uploadVersions.current[kind]){
-    setAssets(v=>({...v,[kind]:response}));setSuccess('فایل با موفقیت در فضای خصوصی ذخیره شد.');
+  setUploading(kind);setUploadProgress(0);setError('');setSuccess('');
+  let sessionId=null;
+  try{
+   const csrf=await mutationToken();let response;
+   if(kind==='video'){
+    // Direct browser -> R2 multipart: no Nginx request-body cap, 16 MiB pieces.
+    const init=await request('/uploads/start',{method:'POST',csrf,
+      body:{filename:file.name,size_bytes:file.size}});
+    sessionId=init.session_id;
+    const completed=[];
+    for(let number=1;number<=init.part_count;number++){
+      if(version!==uploadVersions.current[kind])throw new Error('فایل انتخاب‌شده تغییر کرد؛ آپلود متوقف شد.');
+      const signed=await request(`/uploads/${sessionId}/part-url`,{method:'POST',csrf,body:{number}});
+      const slice=file.slice((number-1)*init.part_size,Math.min(number*init.part_size,file.size));
+      let etag=null,lastError=null;
+      for(let attempt=0;attempt<3&&!etag;attempt++){
+       try{
+        const part=await fetch(signed.url,{method:'PUT',body:slice});
+        if(!part.ok)throw new Error(`R2 HTTP ${part.status}`);
+        etag=part.headers.get('ETag');
+        if(!etag)throw new Error('هدر ETag در R2 CORS قابل خواندن نیست. ExposeHeaders را تنظیم کن.');
+       }catch(err){lastError=err;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));}
+      }
+      if(!etag)throw lastError||new Error('آپلود بخش ویدئو انجام نشد');
+      completed.push({number,etag});
+      setUploadProgress(Math.round(number/init.part_count*100));
+    }
+    response=await request(`/uploads/${sessionId}/complete`,{method:'POST',csrf,body:{parts:completed}});
+    sessionId=null;
+   }else{
+    const body=new FormData();body.append('file',file);
+    response=await request('/assets/'+kind,{method:'POST',body,csrf});
    }
-  }catch(e){setError(e.message)}finally{setUploading('')}
+   if(version===uploadVersions.current[kind]){
+    setAssets(v=>({...v,[kind]:response}));setSuccess('فایل در فضای خصوصی ذخیره شد.');
+   }
+  }catch(e){
+   if(sessionId){try{const csrf=await mutationToken();await request(`/uploads/${sessionId}/abort`,{method:'POST',csrf});}catch{/* R2 lifecycle expires failed uploads. */}}
+   setError(e.message);
+  }finally{setUploading('');setUploadProgress(0)}
  }
  async function submit(e){e.preventDefault();if(!assets.video||!assets.reference||submitting)return;
   setSubmitting(true);setError('');setSuccess('');
@@ -97,6 +130,8 @@ export function CharacterReplacementPage(){
    <span className="cr-model">SCAIL-2 · FP16 · DPO</span></header>
   {config&&!config.worker_ready&&<p role="status" className="cr-hint">Worker ویدئو هنوز آماده یا متصل نیست؛ Job می‌تواند در صف بماند تا Replica مربوط به SCAIL-2 روشن شود.</p>}
   {configError&&<p role="alert" className="cr-alert">قابلیت هنوز روی Backend فعال نیست: {configError}</p>}
+  {uploading==='video'&&<p role="status" className="cr-hint">در حال ارسال مستقیم ویدئو به R2: {uploadProgress}%</p>}
+  {config?.max_source_gib&&<p className="cr-hint">سقف حجم ورودی بر اساس ظرفیت فضای فعلی: {config.max_source_gib} گیگابایت؛ این مقدار توسط مدیر قابل تغییر است. مدت ویدئو سقف ثابت ندارد.</p>}
   {error&&<p role="alert" className="cr-alert">{error}</p>}
   {success&&<p role="status" className="cr-success">{success}</p>}
   <div className="cr-columns"><form onSubmit={submit} className="cr-form">
@@ -121,7 +156,7 @@ export function CharacterReplacementPage(){
     <label className="cr-check"><input type="checkbox" checked={form.confirmed_rights} onChange={e=>update('confirmed_rights',e.target.checked)}/>
       تأیید می‌کنم حق استفاده از ویدئو و تصویر و رضایت افراد مربوط را دارم.</label></div>
    <button className="cr-submit" disabled={!canSubmit}>{submitting?'در حال ثبت درخواست…':'✦ شروع جایگزینی کاراکتر'}</button>
-   <p className="cr-hint">در حالت کیفیت بالا از مدل FP16 و LoRA مخصوص بهبود خروجی استفاده می‌شود. خروجی 16fps و حداکثر ۱۰ ثانیه است.</p>
+   <p className="cr-hint">ویدئوهای بلند به بخش‌های ۸۱ فریمی تقسیم می‌شوند. نرخ داخلی مدل 16fps است؛ زمان نهایی تولید و هزینه GPU به طول ویدئو بستگی دارد. کیفیت اتصال بخش‌ها هنوز نیازمند تست GPU است.</p>
   </form>
   <aside className="cr-preview"><h2>پیش‌نمایش ورودی‌ها</h2>
    {preview.video?<video src={preview.video} controls preload="metadata" playsInline aria-label="ویدئوی اصلی"/>:<div className="cr-empty">ویدئوی اصلی هنوز انتخاب نشده است</div>}

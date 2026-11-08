@@ -51,7 +51,7 @@ def _enabled():
         raise HTTPException(503, 'Character replacement is disabled')
     with db.connect() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if not {'cr_assets', 'cr_jobs', 'cr_runtime'}.issubset(tables):
+    if not {'cr_assets', 'cr_jobs', 'cr_runtime', 'cr_upload_sessions'}.issubset(tables):
         raise HTTPException(503, 'Run scripts/migrate_scail2.py first')
 
 
@@ -171,8 +171,11 @@ def config(actor=Depends(_user)):
     with db.connect() as c:
         worker = c.execute('SELECT seen_at,ready FROM cr_runtime WHERE id=1').fetchone()
     fresh = bool(worker and int(worker['ready']) == 1 and time.time() - float(worker['seen_at']) < 65)
-    return {'enabled': True, 'model': 'SCAIL-2 Wan2.1 14B FP16', 'max_seconds': MAX_SECONDS,
+    return {'enabled': True, 'model': 'SCAIL-2 Wan2.1 14B FP16', 'max_seconds': None,
+            'legacy_upload_max_seconds': MAX_SECONDS,
             'max_video_mb': MAX_VIDEO_BYTES // 1048576, 'max_reference_mb': MAX_IMAGE_BYTES // 1048576,
+            'direct_upload':True,'max_source_gib':int(os.getenv('CHARACTER_REPLACE_MAX_VIDEO_GIB','20')),
+            'long_video_mode':'automatic-window-beta',
             'quality_profiles': [{'id': 'quality', 'steps': 24, 'distill': False, 'dpo_lora': True},
                                  {'id': 'fast', 'steps': 4, 'distill': True, 'dpo_lora': True}],
             'limits': 'One detected person; video is sampled at 16 fps. Multiple people are not reliably selectable in V1.',
@@ -456,9 +459,26 @@ def claim():
     return {'job':{'id':r['id'],'lease_token':token,'quality':r['quality'],'steps':r['steps'],
         'prompt':r['prompt'],'detect_prompt':r['detect_prompt'],'seed':r['seed'],
         'preserve_audio':bool(r['preserve_audio']), 'video_fps':video['fps'],
+        'source_size_bytes':video['size_bytes'],
+        'longform':video['mime']=='application/octet-stream',
         'source_url':source_url,'reference_url':reference_url,
         'source_ext':Path(video['r2_key']).suffix,'reference_ext':Path(ref['r2_key']).suffix,
         'output_key':output_key,'output_put_url':put}}
+
+
+@router.post('/worker/output-url',dependencies=[Depends(_worker)])
+def refresh_output_url(evt:Heartbeat):
+    # Long-form renders may outlive the 6-hour presign issued at claim.
+    with db.connect() as c:
+        row=_worker_job(c,evt.job_id,evt.lease_token)
+        if row['state'] not in {'preparing','running','uploading'}:
+            raise HTTPException(409,'Job is no longer active')
+        key=f'outputs/character-replace/{row["id"]}/attempt-{row["attempts"]}.mp4'
+    try:
+        url=storage.client().generate_presigned_url('put_object',Params={
+            'Bucket':settings.r2_bucket,'Key':key,'ContentType':'video/mp4'},ExpiresIn=21600)
+    except Exception as exc:raise HTTPException(503,'Cannot sign output upload') from exc
+    return {'url':url}
 
 
 @router.post('/worker/heartbeat',dependencies=[Depends(_worker)])

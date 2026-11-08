@@ -41,6 +41,12 @@ def main():
         src.execute('''CREATE TABLE IF NOT EXISTS cr_runtime(
             id INTEGER PRIMARY KEY CHECK(id=1), generation TEXT NOT NULL, ready INTEGER NOT NULL,
             seen_at REAL NOT NULL)''')
+        src.execute('''CREATE TABLE IF NOT EXISTS cr_upload_sessions(
+            id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, asset_id TEXT NOT NULL UNIQUE,
+            r2_key TEXT NOT NULL UNIQUE, upload_id TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL, part_size INTEGER NOT NULL, part_count INTEGER NOT NULL,
+            status TEXT NOT NULL, expires_at REAL NOT NULL, created_at TEXT NOT NULL)''')
+        src.execute('CREATE INDEX IF NOT EXISTS cr_uploads_owner ON cr_upload_sessions(owner_id,status,expires_at)')
         src.execute('CREATE INDEX IF NOT EXISTS cr_jobs_owner_created ON cr_jobs(owner_id,created_at)')
         src.execute('CREATE INDEX IF NOT EXISTS cr_jobs_state_created ON cr_jobs(state,created_at)')
         src.commit()

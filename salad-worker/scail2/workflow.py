@@ -35,7 +35,7 @@ def dimensions(width, height, short=704):
 
 
 def make_graph(video_name, reference_name, *, quality='quality', steps=24, seed=1,
-               detect_prompt='a person', prompt='', source_width=1280,source_height=720):
+               detect_prompt='a person', prompt='', source_width=1280,source_height=720, frame_cap=161):
     if quality not in ALLOWED:
         raise ValueError('Unknown SCAIL-2 quality profile')
     if quality=='quality' and not (16<=steps<=32):
@@ -53,7 +53,7 @@ def make_graph(video_name, reference_name, *, quality='quality', steps=24, seed=
     graph=copy.deepcopy(graph)
     w,h=dimensions(source_width,source_height,704 if quality=='quality' else 512)
     graph['30']['inputs']['image']=reference_name
-    graph['33']['inputs'].update(video=video_name,force_rate=16,frame_load_cap=161,
+    graph['33']['inputs'].update(video=video_name,force_rate=16,frame_load_cap=frame_cap,
                                  skip_first_frames=0,select_every_nth=1)
     graph['3']['inputs']['text']=prompt
     graph['4']['inputs']['text']=''

@@ -43,7 +43,7 @@ class VideoEditEmbeddingTests(unittest.TestCase):
         sys.modules[name]=pkg
         names=['main','auth','media_api','owner_api','account_api','registry_api',
                'parameters_api','workflow_api','worker_v11_api','scheduler_v12_api',
-               'video_api','character_replace_api','gpu_self_service']
+               'video_api','character_replace_api','character_replace_large_uploads','gpu_self_service']
         installed=[]
         def noop(): return {'ok': True}
         try:
@@ -61,6 +61,7 @@ class VideoEditEmbeddingTests(unittest.TestCase):
                 'video_api':[('/api/v2/video/models','GET')],
                 'character_replace_api':[('/api/v2/character-replace/config','GET'),
                                          ('/api/v2/character-replace/jobs','POST')],
+                'character_replace_large_uploads':[('/api/v2/character-replace/uploads/start','POST')],
             }
             for label in names[1:]:
                 stub=types.ModuleType(name+'.'+label)
@@ -77,6 +78,7 @@ class VideoEditEmbeddingTests(unittest.TestCase):
             routes={(r.path,m) for r in base.routes for m in getattr(r,'methods',[])}
             self.assertIn(('/api/v2/character-replace/config','GET'),routes)
             self.assertIn(('/api/v2/character-replace/jobs','POST'),routes)
+            self.assertIn(('/api/v2/character-replace/uploads/start','POST'),routes)
             self.assertIn(('/api/v2/video/models','GET'),routes)
             self.assertTrue(base.state.integrated_owner_api)
         finally:

@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://comfy.imannasr.com"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

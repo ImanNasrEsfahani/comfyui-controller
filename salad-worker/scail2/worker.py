@@ -14,6 +14,8 @@ import time
 from urllib import request, error
 from uuid import uuid4
 from workflow import make_graph
+from workflow import dimensions
+import longform
 
 BACKEND=os.getenv('CHARACTER_REPLACE_BACKEND','').rstrip('/')
 TOKEN=os.getenv('CHARACTER_REPLACE_WORKER_TOKEN','')
@@ -164,9 +166,13 @@ def finish_video(generated,source,target,preserve_audio):
 
 def upload_file(url,path):
     # Small, bounded video previews only; full body fits in worker RAM.
-    data=path.read_bytes()
-    req=request.Request(url,data=data,method='PUT',headers={'Content-Type':'video/mp4'})
-    with request.urlopen(req,timeout=900) as response:
+    def read_chunks():
+        with path.open('rb') as stream:
+            while chunk:=stream.read(4*1024*1024):
+                yield chunk
+    req=request.Request(url,data=read_chunks(),method='PUT',headers={
+        'Content-Type':'video/mp4','Content-Length':str(path.stat().st_size)})
+    with request.urlopen(req,timeout=1800) as response:
         if response.status not in (200,201,204):raise RuntimeError('Output upload not accepted')
 
 
@@ -193,6 +199,8 @@ def event_update(job,state,error_text=''):
 
 
 def handle(job):
+    if job.get('longform'):
+        return handle_longform(job)
     job_id=job['id'];cancel=threading.Event();hb=Heartbeat(job,cancel);hb.start()
     prefix='scail2-'+re.sub('[^0-9a-f-]','',job_id)
     video=INPUT_DIR/(prefix+job['source_ext'])
@@ -248,6 +256,80 @@ def handle(job):
     finally:
         hb.done.set();hb.join(timeout=4)
         for f in (video,reference,final):f.unlink(missing_ok=True)
+
+
+def handle_longform(job):
+    """Run an arbitrary-duration source as independent, bounded 81-frame prompts.
+
+    The original is retained for audio mux. This path deliberately does not
+    load the entire video into a ComfyUI node's RAM/VRAM.
+    """
+    import tempfile
+    job_id=job['id'];cancel=threading.Event();hb=Heartbeat(job,cancel);hb.start()
+    prefix='scail2-'+re.sub('[^0-9a-f-]','',job_id)
+    src=INPUT_DIR/(prefix+job['source_ext'])
+    ref=INPUT_DIR/(prefix+'-reference'+job['reference_ext'])
+    final=Path('/tmp')/(prefix+'-result.mp4')
+    parts=[]
+    try:
+        event_update(job,'preparing')
+        byte_cap=int(job['source_size_bytes'])
+        if byte_cap<64:raise ValueError('Invalid source object size')
+        download(job['source_url'],src,byte_cap)
+        if src.stat().st_size!=byte_cap:raise RuntimeError('Source size changed after R2 claim')
+        download(job['reference_url'],ref,15*1024*1024)
+        total_seconds=duration(src)
+        windows=longform.plan(total_seconds)
+        w,h=video_dimensions(src)
+        target_w,target_h=dimensions(w,h,704 if job['quality']=='quality' else 512)
+        total_frames=sum(frames-drop for _,frames,drop in windows)
+        if runtime_ready():raise RuntimeError('Required SCAIL-2 nodes missing')
+        event_update(job,'running')
+        # Do not allow a single decoded giant batch into SAM3 or VAE.
+        with tempfile.TemporaryDirectory(prefix='scail2-windows-') as td:
+            folder=Path(td)
+            for i,(first,frames,drop) in enumerate(windows):
+                if cancel.is_set() or STOP.is_set():raise InterruptedError('Cancelled before next window')
+                clip=INPUT_DIR/(prefix+f'-chunk-{i:05d}.mp4')
+                try:
+                    longform.extract_window(src,clip,start_frame=first,frame_count=frames,
+                                            width=target_w,height=target_h)
+                    if cancel.is_set() or STOP.is_set():raise InterruptedError('Cancelled before GPU dispatch')
+                    graph,meta=make_graph(clip.name,ref.name,quality=job['quality'],
+                        steps=job['steps'],seed=job['seed'],detect_prompt=job['detect_prompt'],
+                        prompt=job['prompt'],source_width=target_w,source_height=target_h,
+                        frame_cap=81)
+                    prompt_id=post_graph(graph)
+                    rendered=wait_graph(prompt_id,cancel)
+                    part=folder/f'{i:05d}.mp4'
+                    longform.encode_segment(rendered,part,skip=drop,frame_count=frames)
+                    # ComfyUI has already returned this output; reclaim disk for long runs.
+                    rendered.unlink(missing_ok=True)
+                    parts.append(part)
+                    print('[scail2] finished window',i+1,'of',len(windows),flush=True)
+                finally:
+                    clip.unlink(missing_ok=True)
+            if cancel.is_set() or STOP.is_set():raise InterruptedError('Cancelled before concatenation')
+            event_update(job,'uploading')
+            longform.stitch(parts,src,final,preserve_audio=job['preserve_audio'],frame_total=total_frames)
+        if cancel.is_set() or STOP.is_set():raise InterruptedError('Cancelled before upload')
+        fresh=backend('output-url',{'job_id':job['id'],'lease_token':job['lease_token']})
+        upload_file(fresh['url'],final)
+        if cancel.is_set():raise InterruptedError('Cancelled during upload')
+        event_update(job,'succeeded')
+        print('[scail2] long-form completed',job_id,'windows',len(windows),flush=True)
+    except InterruptedError:
+        if not hb.lost.is_set():
+            try:event_update(job,'cancelled')
+            except Exception:pass
+    except Exception as exc:
+        print('[scail2] long-form job failed',job_id,type(exc).__name__,str(exc)[:220],flush=True)
+        if not hb.lost.is_set():
+            try:event_update(job,'failed',type(exc).__name__+': '+str(exc)[:160])
+            except Exception:pass
+    finally:
+        hb.done.set();hb.join(timeout=4)
+        for p in (src,ref,final):p.unlink(missing_ok=True)
 
 
 def main():
