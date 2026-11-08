@@ -1,0 +1,33 @@
+# Root-level context for salad-worker/scail2/Dockerfile.
+# Never transmit private environment, credentials, output, checkpoints or git history.
+.git
+**/.git
+.env
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/*secret*
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+**/venv
+/data
+/outputs
+/uploads
+/models
+/**/*.safetensors
+/**/*.ckpt
+/**/*.pth
+/**/*.pt
+/**/*.onnx
+/**/*.mp4
+/**/*.webm
+/**/*.mov
+/**/*.sqlite
+/**/*.sqlite3
+/**/*.db
+/**/*.bak

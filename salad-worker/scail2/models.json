@@ -1,0 +1,56 @@
+{
+  "model_id": "scail2-wan21-14b-fp16",
+  "notes": "FP16 quality on RTX 5090 32GB needs host RAM offload. All artifacts downloaded separately; no weights in source ZIP.",
+  "artifacts": [
+    {
+      "role": "diffusion",
+      "repo": "Comfy-Org/SCAIL-2",
+      "path": "diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+      "destination": "diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+      "sha256": "e3f9cd52184949ee8ffdc01ba14de4c619e0ddfa09ae105cb7efce5c8dc9fe43"
+    },
+    {
+      "role": "sam3",
+      "repo": "Comfy-Org/sam3.1",
+      "path": "checkpoints/sam3.1_multiplex_fp16.safetensors",
+      "destination": "checkpoints/sam3.1_multiplex_fp16.safetensors",
+      "sha256": "9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03"
+    },
+    {
+      "role": "vae",
+      "repo": "Comfy-Org/Wan-2.1",
+      "path": "split_files/vae/wan_2.1_vae.safetensors",
+      "destination": "vae/wan_2.1_vae.safetensors",
+      "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b"
+    },
+    {
+      "role": "text_encoder",
+      "repo": "Comfy-Org/Wan-2.1",
+      "path": "split_files/text_encoders/umt5_xxl_fp16.safetensors",
+      "destination": "text_encoders/umt5_xxl_fp16.safetensors",
+      "sha256": "7b8850f1961e1cf8a77cca4c964a358d303f490833c6c087d0cff4b2f99db2af"
+    },
+    {
+      "role": "clip_vision",
+      "repo": "Comfy-Org/Wan-2.1",
+      "path": "split_files/clip_vision/clip_vision_h.safetensors",
+      "destination": "clip_vision/clip_vision_h.safetensors",
+      "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161"
+    },
+    {
+      "role": "dpo_lora",
+      "repo": "Comfy-Org/SCAIL-2",
+      "path": "loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+      "destination": "loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+      "sha256": "b106522036f64e50f5f8ae3b808973515ff442cc2fac27b65d875eafb95b89e2"
+    },
+    {
+      "role": "fast_lora",
+      "repo": "lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v",
+      "revision": "b4a665695f11354fbcd2c8e87822de7d359b3a4d",
+      "path": "loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+      "destination": "loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+      "sha256": "8833bd4fd7c8eabebf0bc8ee5cfaf47f4f310ce116928a02c1adf8941dd4b0f1"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+# Model files are prepared by download_models.py before ComfyUI API starts.
+models:
+  before_start: []
+  after_start: []
