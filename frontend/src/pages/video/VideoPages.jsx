@@ -2,7 +2,9 @@ import React,{useEffect,useState} from 'react';
 import {useAuth} from '../../auth/session.jsx';
 import {AppLink} from '../../layouts/Layouts.jsx';
 import {videoRequest,videoBlob} from './videoClient.mjs';
+import {CharacterReplacementPage} from './CharacterReplacementPage.jsx';
 import './video.css';
+import './video-edit-methods.css';
 
 export function VideoCreatePage(){
  const {ownerClient,session,epoch,mutationToken}=useAuth();
@@ -50,7 +52,40 @@ export function VideoCreatePage(){
   <AppLink to="/library">مشاهده ویدئوها در کتابخانه شخصی</AppLink>
  </section>;
 }
-export function VideoEditPage(){return <section className="v13-page"><h1>ویرایش ویدئو</h1><p role="status">هیچ Workflow و Model ویدئو‌ادیت با Runtime تأییدشده در این نسخه عرضه نشده است. Trim یا Video-to-Video جعلی فعال نمی‌شود.</p><AppLink to="/library">مشاهده و دانلود اصل ویدئوهای خودم</AppLink></section>}
+
+/** All video-editing methods live on the existing /edit/video route.
+ *  SCAIL-2's UI is embedded directly; no secondary route is required.
+ */
+export function VideoEditPage(){
+ return <section className="v13-page v-edit-studio" aria-label="ویرایش ویدئو">
+  <header className="v-edit-overview">
+   <span className="v-edit-eyebrow">COMFY STUDIO / VIDEO EDITOR</span>
+   <h1>ویرایش ویدئو با هوش مصنوعی</h1>
+   <p>روش ویرایش را انتخاب کنید. جایگزینی شخصیت با SCAIL-2 در همین صفحه در دسترس است.</p>
+  </header>
+  <div className="v-edit-methods" aria-label="روش‌های ویرایش ویدئو">
+   <a href="#scail2-character-editor" className="v-edit-method v-edit-method-active" aria-current="true">
+    <span className="v-edit-method-icon" aria-hidden="true">✦</span>
+    <span className="v-edit-method-body"><strong>جایگزینی شخصیت</strong><small>Character Replacement · SCAIL-2</small><span>آپلود ویدئو و تصویر شخصیت جدید؛ حفظ حرکت و تلاش برای بازسازی پس‌زمینه.</span></span>
+    <span className="v-edit-status v-edit-status-ready">انتخاب‌شده</span>
+   </a>
+   <div className="v-edit-method v-edit-method-unavailable" aria-disabled="true">
+    <span className="v-edit-method-icon" aria-hidden="true">◫</span>
+    <span className="v-edit-method-body"><strong>ویرایش با پرامپت</strong><small>Video-to-Video</small><span>تغییر صحنه با توضیح متنی؛ هنوز مدل اجرایی تأیید نشده است.</span></span>
+    <span className="v-edit-status">به‌زودی</span>
+   </div>
+   <div className="v-edit-method v-edit-method-unavailable" aria-disabled="true">
+    <span className="v-edit-method-icon" aria-hidden="true">✂</span>
+    <span className="v-edit-method-body"><strong>برش و تدوین</strong><small>Trim / Edit</small><span>ابزار ویرایش زمانی هنوز به‌صورت اجرایی عرضه نشده است.</span></span>
+    <span className="v-edit-status">به‌زودی</span>
+   </div>
+  </div>
+  <div id="scail2-character-editor" className="v-edit-embedded" role="region" aria-label="فرم جایگزینی شخصیت">
+   <div className="v-edit-section-heading"><h2>جایگزینی شخصیت با SCAIL-2</h2><p>یک ویدئو و یک تصویر مرجع بارگذاری کنید و کیفیت پردازش را تنظیم کنید.</p></div>
+   <CharacterReplacementPage />
+  </div>
+ </section>;
+}
 
 export function PrivateVideoPlayer({assetId}){
  const {ownerClient,epoch}=useAuth(),[src,setSrc]=useState(null),[poster,setPoster]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(true);

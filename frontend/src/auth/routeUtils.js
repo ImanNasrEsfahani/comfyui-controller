@@ -23,6 +23,8 @@ export function routeFor(path) {
   if (normalized === '/editor') return {scope:'redirect', to:'/create/image'};
   if (normalized === '/infrastructure') return {scope:'redirect', to:'/admin/infrastructure'};
   if (normalized === '/settings') return {scope:'redirect', to:'/admin/deployment-profiles'};
+  // Backward-compatible alias: SCAIL-2 now lives INSIDE the existing /edit/video page.
+  if (normalized === '/edit/video/character') return {scope:'redirect', to:'/edit/video'};
   if (/^\/admin\/users\/[A-Za-z0-9_-]{1,96}$/.test(normalized)) return {scope:'admin', path:normalized};
   if (/^\/models\/[A-Za-z0-9_-]{1,96}$/.test(normalized)) return {scope:'user',path:normalized};
   if (normalized === '/admin/jobs') return {scope:'admin', path:normalized};

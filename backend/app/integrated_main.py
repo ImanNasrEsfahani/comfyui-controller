@@ -19,6 +19,7 @@ from .workflow_api import router as workflow_router
 from .worker_v11_api import router as worker_v11_router
 from .scheduler_v12_api import router as scheduler_v12_router
 from .video_api import router as video_v13_router
+from .character_replace_api import router as character_replace_router
 from .gpu_self_service import router as gpu_self_service_router
 
 # Auth first; media and owner-scoped routes before old legacy API routes.
@@ -34,6 +35,7 @@ ROUTERS = (
     worker_v11_router,
     scheduler_v12_router,
     video_v13_router,
+    character_replace_router,
 )
 
 
@@ -102,6 +104,8 @@ def _install_once():
         ('/api/v2/semantic-workflows', 'GET'),
         ('/api/v2/worker/claim', 'POST'),
         ('/api/v2/video/models', 'GET'),
+        ('/api/v2/character-replace/config', 'GET'),
+        ('/api/v2/character-replace/jobs', 'POST'),
     }
     actual = {(r.path, method) for r in app.router.routes
               if isinstance(r, APIRoute) for method in r.methods}

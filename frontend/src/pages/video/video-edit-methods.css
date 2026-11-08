@@ -1,0 +1,27 @@
+/* Integrated video editing methods: intentionally scoped to /edit/video only. */
+.v-edit-studio{max-width:1320px;margin:0 auto;min-width:0;direction:rtl}
+.v-edit-overview{padding:4px 0 24px}
+.v-edit-eyebrow{font-size:12px;letter-spacing:.11em;color:#66bfbe;font-weight:700}
+.v-edit-overview h1{margin:10px 0 9px;font-size:clamp(1.65rem,3.5vw,2.5rem);line-height:1.35}
+.v-edit-overview p,.v-edit-section-heading p{margin:0;color:var(--muted,#9aaec1);line-height:1.9}
+.v-edit-methods{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0 0 30px}
+.v-edit-method{position:relative;min-width:0;display:flex;gap:13px;align-items:flex-start;text-decoration:none!important;color:inherit!important;background:rgba(100,126,157,.055);border:1px solid rgba(147,167,184,.22);border-radius:16px;padding:18px;box-sizing:border-box;min-height:142px;transition:border-color .16s,background .16s}
+.v-edit-method-active{border-color:rgba(64,190,180,.78);background:linear-gradient(135deg,rgba(24,146,146,.13),rgba(55,91,134,.045));box-shadow:inset 0 0 0 1px rgba(45,166,163,.12)}
+.v-edit-method-active:hover{border-color:#60c9c1;background:rgba(24,146,146,.15)}
+.v-edit-method-active:focus-visible{outline:2px solid #7ce9dc;outline-offset:3px}
+.v-edit-method-unavailable{opacity:.63;cursor:not-allowed}
+.v-edit-method-icon{flex:none;display:grid;place-items:center;width:42px;height:42px;background:rgba(77,154,164,.14);border:1px solid rgba(103,190,187,.22);border-radius:12px;color:#67c8c4;font-size:21px}
+.v-edit-method-body{min-width:0;display:flex;flex-direction:column;gap:5px;padding-bottom:19px}
+.v-edit-method-body strong{font-size:15px}.v-edit-method-body small{font-size:11px;color:#68b8ba;direction:ltr;text-align:right}
+.v-edit-method-body>span{font-size:12px;line-height:1.8;color:var(--muted,#9aaec1)}
+.v-edit-status{position:absolute;bottom:12px;left:13px;color:#98a9b7;font-size:11px;font-weight:700}
+.v-edit-status-ready{color:#5ad0ad}
+.v-edit-embedded{scroll-margin-top:22px;min-width:0}
+.v-edit-section-heading{display:flex;flex-direction:column;gap:8px;margin:0 0 18px}
+.v-edit-section-heading h2{font-size:clamp(1.2rem,2.3vw,1.55rem);margin:0}
+/* The existing CharacterReplacementPage is embedded in this route. Remove only
+ * its duplicate stand-alone heading and self-link; do not alter its form. */
+.v-edit-embedded .cr-title,.v-edit-embedded .cr-footer{display:none}
+.v-edit-embedded .cr-page{padding:0 0 50px;max-width:none;margin:0}
+@media(max-width:1050px){.v-edit-methods{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){.v-edit-methods{grid-template-columns:1fr}.v-edit-method{min-height:118px}.v-edit-overview{padding-bottom:16px}}
