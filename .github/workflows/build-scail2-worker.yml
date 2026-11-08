@@ -55,7 +55,9 @@ jobs:
           provenance: true
           build-args: |
             BAKE_MODE=thin
-          tags: ghcr.io/${{ steps.ghcr.outputs.owner }}/comfyui-controller-scail2-worker:thin
+          tags: |
+            ghcr.io/${{ steps.ghcr.outputs.owner }}/comfyui-controller-scail2-worker:thin
+            ghcr.io/${{ steps.ghcr.outputs.owner }}/comfyui-controller-scail2-worker:thin-${{ github.sha }}
           cache-from: type=gha,scope=scail2-thin
           cache-to: type=gha,scope=scail2-thin,mode=max
   baked:
