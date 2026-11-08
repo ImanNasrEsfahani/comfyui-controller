@@ -7,7 +7,21 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from huggingface_hub import hf_hub_download
+def hf_hub_download(*args, **kwargs):
+    """Load the optional Hugging Face downloader only for actual model IO.
+
+    CI unit tests and offline tooling import this module without model-download
+    dependencies. The SCAIL-2 Docker image installs huggingface_hub for runtime.
+    Keeping this callable at module scope also supports deterministic mocking.
+    """
+    try:
+        from huggingface_hub import hf_hub_download as _download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is required for model downloads; "
+            "install with: python -m pip install 'huggingface_hub>=0.35,<2'"
+        ) from exc
+    return _download(*args, **kwargs)
 
 MODELS_ROOT=Path(os.environ.get('SCAIL2_MODELS_ROOT','/opt/ComfyUI/models'))
 CATALOG=Path(__file__).with_name('models.json')

@@ -17,7 +17,7 @@
 | GitHub Actions YAML و مدل‌ها | PASS static | جدول مدل‌ها ۷ SHA-256 کامل؛ Tag GHCR lowercase و CI تست‌ها |
 | Frontend JSX و CSS | PASS syntax | TypeScript transpile و CSS parser محلی؛ نه Browser E2E |
 | Workflow حقیقی upstream | PASS static | ۴۰ Node در گراف اصلی؛ ۳۶ Node پس از تغییرات کیفیت و حذف خروجی‌های فرعی؛ هیچ اتصال معلقی در گراف کنترل‌شده |
-| مجموعه تست‌های Python | **۲۰ PASS** | `python -m unittest discover -s tests -p 'test_scail2*.py' -v` |
+| مجموعه تست‌های Python | **۲۱ PASS** | `python -m unittest discover -s tests -p 'test_scail2*.py' -v` |
 
 ## نقص‌هایی که اصلاح شدند
 
@@ -42,3 +42,21 @@
 سه قابلیت همچنان خارج از نسخه اول هستند: Autoscaling مستقل از GPU بر اساس صف SCAIL-2، پاکسازی دوره‌ای فایل‌های موقت/بدون مرجع، و اتصال خروجی‌ها به Library عمومی Controller. این موارد در README صریحاً از بخش تکمیل‌شده جدا شده‌اند. قابلیت چندکاراکتری نیز در نسخه اول ارائه نشده است.
 
 **نتیجه ممیزی:** بسته اصلاح‌شده آماده بررسی و اعمال روی Checkout و شروع CI واقعی است؛ نه گواهی Production Ready یا Runtime GPU تأییدشده. هیچ تغییر یا Commit به مخزن GitHub اصلی ارسال نشده است.
+
+
+## پیوست ممیزی v3 — پاسخ به خطای GitHub Actions
+
+- **شواهد ورودی:** `python-and-worker` با دو خطای collection شکست خورد:
+  `test_scail2_deep.py` و `test_scail2_overlay.py` هر دو در import
+  `model_parts.py` و بارگذاری `huggingface_hub` متوقف شدند.
+- **علت:** Dependency دانلود مدل، در سطح ماژول import می‌شد درحالی‌که
+  Job عمومی تست فقط وابستگی‌های Backend را نصب کرده بود.
+- **رفع:** تبدیل importهای `huggingface_hub` در `model_parts.py` و
+  `download_models.py` به import تنبل درون تابع دانلود؛ حفظ تابع خارجی
+  برای patchهای Mock تست‌ها.
+- **تست رگرسیون جدید:** بارگذاری دو ماژول در حالی که import بسته عمداً
+  غیرمجاز شده است؛ بدون نصب مدل و بدون درخواست شبکه.
+- **نتیجه محلی:** ۲۱ تست SCAIL-2 موفق. نتیجه ۶۵۳ تست اصلی مخزن را
+  تا Re-run دوباره GitHub نمی‌توان «تأیید نهایی» نامید.
+- **محدودیت:** Build Docker، اجرای CUDA، دانلود وزن‌ها، Salad و R2 واقعی
+  همچنان در این محیط اجرا نشده‌اند.

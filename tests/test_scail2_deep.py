@@ -99,6 +99,32 @@ class WorkerCancellation(unittest.TestCase):
         self.assertIn('model_parts.py verify',docker)
         self.assertIn('SCAIL2_BAKE_MODE',docker)
 
+class OptionalDependencyIsolation(unittest.TestCase):
+    def test_offline_import_does_not_require_huggingface_hub(self):
+        """Reproduce the GitHub python-and-worker collection environment.
+
+        The hub package may be absent from backend CI, but model downloading
+        remains optional until an actual worker build or cold start.
+        """
+        import builtins
+        original_import = builtins.__import__
+
+        def block_hf(name, *args, **kwargs):
+            if name == 'huggingface_hub' or name.startswith('huggingface_hub.'):
+                raise ModuleNotFoundError("No module named 'huggingface_hub'")
+            return original_import(name, *args, **kwargs)
+
+        with patch('builtins.__import__', side_effect=block_hf):
+            for filename in ('model_parts.py', 'download_models.py'):
+                spec = importlib.util.spec_from_file_location(
+                    '_scail2_without_hf_' + filename.replace('.', '_'), WORKER / filename
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                with self.assertRaisesRegex(RuntimeError, 'huggingface_hub is required'):
+                    module.hf_hub_download(repo_id='unused', filename='unused')
+
+
 class DownloadCache(unittest.TestCase):
     def test_checked_download_cache_and_corruption_recovery(self):
         import download_models
