@@ -1,0 +1,405 @@
+{
+  "title": "Our Team",
+  "subtitle": "Mentors and innovators collaborating to grow startups and future leaders.",
+  "description": [
+    "At NovaNest, we believe that success is not just the result of great ideas — it’s the outcome of a shared synergy among people who move forward with energy, experience, and faith in the future. Our team is a dynamic blend of mentors, core members, and trainees who collaborate, learn continuously, and support startups on their journey toward growth and success. We believe that when the knowledge, experience, and connections of mentors merge with the energy, creativity, and innovation of the new generation, the best results are achieved."
+  ],
+  "roles": {
+    "Mentors": {
+      "title": "Mentors",
+      "people": [
+        {
+          "image": "/static/images/our-team/mentors/rasoul-moradimehr.webp",
+          "position": "Founder & Chairman",
+          "name": "Rasoul Moradimehr",
+          "linkedIn": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "text": "managers",
+          "slug": "rasoul-moradimehr",
+          "first_name": "Rasoul",
+          "last_name": "Moradimehr",
+          "websites": [],
+          "job_title": "Founder & Chairman",
+          "instagram": "https://instagram.com/dr.moradimehr.rasoul",
+          "email": "Rasoul@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "whatsapp": "https://wa.me/17789865432",
+          "thumbnail": "/static/images/our-team/mentors/rasoul-moradimehr.webp",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Business Development",
+            "Startup Mentorship",
+            "Venture Capital",
+            "Strategic Planning"
+          ],
+          "interests": [
+            "Mentoring",
+            "Entrepreneurship",
+            "Investment",
+            "Teamwork",
+            "Startup"
+          ],
+          "education": "PHD",
+          "about": [
+            "Dr. Moradimehr is an experienced entrepreneur and investor with more than a decade of expertise in business development, investment, and startup leadership. He began his professional journey in Iran, where he founded and managed several successful ventures that provided him with valuable knowledge in entrepreneurship and innovation. Among his most notable initiatives are the founding and management of Landa Investment Holding, the creation of the Landa Business Academy to empower young talents, and the establishment and leadership of the Forough Knowledge-Based Accelerator.",
+            "In addition, Rasoul served as Chairman of the Board of Farazman, where he played a key role in building strong connections between academia and industry, and forged partnerships with international universities and educational institutions. He was also the pioneer of the “Education Through Travel” model in Iran, an innovative approach that combined learning with real-world experiences and exploration.",
+            "Throughout his career, Rasoul Moradimehr has collaborated with numerous successful international startups, gaining invaluable experience in scaling ventures globally.",
+            "After moving to Canada, he launched Novanest Venture, a firm dedicated to supporting startups and international entrepreneurs through investment, acceleration, and advisory services.",
+            "Rasoul Moradi Mehr strongly believes that combining his past experiences with new opportunities in Canada can create a powerful platform for innovation, economic growth, and building a brighter future for the next generation of entrepreneurs."
+          ]
+        },
+        {
+          "image": "/static/images/our-team/mentors/majid-soltanzadeh.webp",
+          "position": "Personal and Business Coach",
+          "name": "Majid Soltanzadeh",
+          "linkedIn": "https://www.linkedin.com/in/majid-soltanzadeh/",
+          "text": "Coach",
+          "slug": "majid-soltanzadeh",
+          "first_name": "Majid",
+          "last_name": "Soltanzadeh",
+          "websites": [],
+          "job_title": "Personal and Business Coach",
+          "instagram": "https://www.instagram.com/majid_soltanzadeh/",
+          "email": "Majid@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/majid-soltanzadeh/",
+          "whatsapp": "https://wa.me/17789865432",
+          "thumbnail": "/static/images/our-team/mentors/majid-soltanzadeh.webp",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Business Coaching",
+            "Persoanl Mentorship",
+            "Marketing Leadershipment",
+            "Personal Branding"
+          ],
+          "interests": [
+            "Education & Personal Growth",
+            "Travel & Cultural Exploration",
+            "Calligraphy & Creative Arts",
+            "Mental Well-Being & Mindfulness",
+            "Coaching & Empowering Young Professionals",
+            "Human Behavior & Organizational Culture"
+          ],
+          "education": "PHD",
+          "about": [
+            "Dr. Majid Soltanzadeh, widely known as “Dr. Stress,” is an Industrial-Organizational Psychologist, professional coach, and international trainer whose primary mission is to help people transform stress into a positive driving force for growth and success. He is the founder and CEO of the international Dr. Stress Group, an organization operating in both Iran and Canada, focused on education, consulting, personal coaching, and organizational development.",
+            "Dr. Soltanzadeh’s professional journey is a blend of academic expertise and over two decades of practical experience. His background includes business management, strategic planning, marketing, sales, human resources, and personal development. As a coach and consultant, he has worked with numerous entrepreneurs, business owners, and managers, guiding them toward higher performance, emotional balance, and professional clarity. He strongly believes in the concept of “positive stress,” a transformative idea at the core of his personal brand — the belief that stress can be harnessed as energy, motivation, and creativity.",
+            "His media presence and educational activities have played a significant role in making him a recognizable figure. Dr. Soltanzadeh regularly appears in workshops, seminars, radio interviews, and digital platforms, where he explains stress management, mindfulness, and self-improvement in a simple, practical, and engaging way. His storytelling, especially about his immigration journey and the creation of the “Dr. Stress” brand, has helped him build a genuine connection with his audience.",
+            "Beyond his psychological and coaching work, Dr. Soltanzadeh is also passionate about art and practices calligraphy professionally — a reflection of his creative and calm personal identity. The color yellow, symbolizing joy, energy, and optimism, has become a key element of his brand identity and is present throughout his visual content.",
+            "Today, Dr. Majid Soltanzadeh is recognized as an influential figure in mental well-being, personal development, and coaching. He continues to guide individuals and organizations toward building a more peaceful, purposeful, and successful life.",
+            "• Business & Life Coaching",
+            "• Leadership & Decision-Making Development",
+            "• Stress Management & Personal Resilience",
+            "• Strategic Thinking & Career Planning",
+            "• Communication & Emotional Intelligence (EQ)",
+            "• Personal Branding & Professional Growth"
+          ]
+        },
+        {
+          "image": "/static/images/our-team/mentors/arvin-radan.webp",
+          "position": "Business Developer and Strategist",
+          "name": "Arvin Radan",
+          "linkedIn": "https://www.linkedin.com/in/arvin-radan/",
+          "text": "Coach",
+          "slug": "arvin-radan",
+          "first_name": "Arvin",
+          "last_name": "Radan",
+          "websites": [],
+          "job_title": "Business Developer and Strategist",
+          "instagram": "https://www.instagram.com/arvin-radan/",
+          "email": "Arvin@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/arvin-radan/",
+          "whatsapp": "https://wa.me/17789865432",
+          "thumbnail": "/static/images/our-team/mentors/arvin-radan.webp",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Business Development",
+            "Startup Mentorship",
+            "Venture Capital",
+            "Strategic Planning"
+          ],
+          "interests": [
+            "Mentoring",
+            "Entrepreneurship",
+            "Investment",
+            "Teamwork",
+            "Startup"
+          ],
+          "education": "PHD",
+          "about": [
+            "Arvin is an international scholar, researcher and energy expert with more than 20 years of cross-functional work experience in academia and industry in the Middle East, Europe, and North America. He is currently the R&D director at A&H Engineering Ltd. and the president and CEO at Radinsight Consulting Co. ",
+            "Arvin holds a PhD degree in Power Electronics and Electric Drives from the Technical University of Munich, Germany, one US patent and three US and Canadian pending patents and has authored one book and co-authored more than 70 articles in the peer-reviewed international journals and conference proceedings. He is a certified energy manager and creates seed documents for new standards for CSA.",
+            "Arvin was a board member of the Association of Iranian Engineers of BC, co-founder and vice president of the Iranian Wind Energy Association, co-founder and treasurer of the Power Electronics Society of Iran and an associate professor at K.N.Toosi University of Technology for many years. He co-initiated the international IEEE annual PEDSTC conference and served at its organizing committee for three years. He also served as VP of membership, VP of education and President of the Presidents’ Distinguished Talk of the Town Toastmasters Club in Coquitlam.",
+            "Arvin’s areas of expertise are energy efficiency and policy, power conversion and variable frequency drive systems, power quality assessment and mitigation. He is an active article reviewer of ISI journals and a senior member of IEEE. Arvin is an active hiker, an environmental activist and a supporter of youth programs.",
+            "Under his leadership, Novanest Venture focuses on:",
+            "• R&D Director at A&H Engineering Ltd. and President & CEO at Radinsight Consulting Co.",
+            "• PhD in Power Electronics and Electric Drives (Technical University of Munich)",
+            "• Holder of one US patent and three US/Canadian pending patents; author and co-author of numerous peer-reviewed articles and a book",
+            "• Former board member and co-founder roles (Association of Iranian Engineers of BC, Iranian Wind Energy Association, Power Electronics Society of Iran); former associate professor",
+            "• Co‑initiated the international IEEE PEDSTC conference and served on its organizing committee; leadership roles in Toastmasters (VP membership, VP education, President)",
+            "• Expertise in energy efficiency & policy, power conversion & variable frequency drive systems, and power quality assessment & mitigation",
+            "• Senior member of IEEE and active reviewer for ISI journals",
+            "• Active hiker, environmental activist, and supporter of youth programs"
+          ]
+        },
+        {
+          "image": "/static/images/our-team/mentors/avesta-narimani.webp",
+          "position": "Data Science and AI Mentor",
+          "name": "Avesta Narimani",
+          "linkedIn": "https://www.linkedin.com/in/avestanarimani",
+          "text": "Mentor",
+          "slug": "avesta-narimani",
+          "first_name": "Avesta",
+          "last_name": "Narimani",
+          "websites": [],
+          "job_title": "Data Science and AI Mentor",
+          "instagram": "",
+          "email": "Avesta@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/avestanarimani",
+          "whatsapp": "",
+          "thumbnail": "/static/images/our-team/mentors/avesta-narimani.webp",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Data Science Mentorship",
+            "Machine Learning",
+            "Data Engineering",
+            "Technical Education",
+            "Technology Commercialization"
+          ],
+          "interests": [
+            "Python in Education",
+            "Open-Source Software",
+            "Water and Sustainability Data",
+            "Applied AI and Computer Vision",
+            "Coaching Young Professionals"
+          ],
+          "education": "PHD",
+          "about": [
+            "Dr. Avesta Narimani is a Vancouver-based physicist, data engineer, and educator specializing in data science, applied artificial intelligence, and evidence-based problem-solving. He earned a PhD in Soft Condensed Matter Physics from Simon Fraser University (SFU), along with a Graduate Certificate in Science and Technology Commercialization from SFU’s Beedie School of Business. His work brings together scientific research, technology development, and real-world business applications.",
+            "Over more than a decade with SFU’s Department of Physics, he has taught and mentored students at different stages of their academic journeys. He redesigned physics laboratory instruction around interactive Jupyter notebooks, bringing Python, hands-on experimentation, and data analysis into the learning experience. His educational work has also included coaching 15 summer employees.",
+            "His applied projects include building time-series forecasting models for energy systems, creating a predictive tool to estimate how much of a customer’s water demand could be covered by harvested rainwater, and contributing to Sketch to UI for Code on the Go, an open-source Android development tool. These projects demonstrate his approach to transforming complex information into practical solutions across sustainability, software, and computer vision.",
+            "With training in science and technology commercialization, Dr. Narimani helps bridge the gap between technical innovation and market needs. He emphasizes clear problem definitions, testable assumptions, meaningful data collection, and measurable results when evaluating a new product or business opportunity.",
+            "As a Data Science and AI Mentor at NovaNest Venture, he supports startup founders in using data to validate business ideas, identify practical applications of machine learning, and measure product and business growth. He is especially passionate about accessible technical education, open-source collaboration, and coaching the next generation of professionals."
+          ]
+        },
+        {
+          "image": "/static/images/our-team/mentors/alireza-mobini.webp",
+          "position": "Startup and Innovation Mentor",
+          "name": "Alireza Mobini",
+          "linkedIn": "",
+          "text": "mentor",
+          "slug": "alireza-mobini",
+          "first_name": "Alireza",
+          "last_name": "Mobini",
+          "websites": [],
+          "job_title": "Startup and Innovation Mentor",
+          "instagram": "",
+          "email": "ar_mobini2009@yahoo.com",
+          "linkedin": "",
+          "whatsapp": "",
+          "thumbnail": "/static/images/our-team/mentors/alireza-mobini.webp",
+          "location": "Tehran, Iran",
+          "skills": [
+            "Idea Validation",
+            "Business Model and Business Plan Development",
+            "MVP Development",
+            "Fundraising Support",
+            "SME Consulting"
+          ],
+          "interests": [
+            "Technology Commercialization",
+            "Knowledge-Based Enterprises",
+            "Industrial Innovation",
+            "Technology Transfer",
+            "Technology Entrepreneurship"
+          ],
+          "education": "PhD in Electrical Engineering · Master's in Management",
+          "about": [
+            "Alireza Mobini has worked in the technology and startup ecosystem since 2013, evaluating ideas and teams across innovation centers, incubators, and technology parks. Since 2021, he has served as a Grade 1 Consultant for the Iran SME Organization, a senior consulting designation for industrial estates and small and medium enterprises.",
+            "He holds a PhD in Electrical Engineering and a Master's in Management, and works at the intersection of technical feasibility and business viability — a combination that lets him evaluate both whether an idea works and whether it can become a company.",
+            "At NovaNest Venture, Alireza mentors founders on idea validation, building out business models, business plans, and MVPs, and preparing for fundraising.",
+            "• Idea Validation",
+            "• Business Model and Business Plan Development",
+            "• MVP Development",
+            "• Fundraising Readiness",
+            "• SME and Industrial Estate Consulting"
+          ]
+        },
+        {
+          "image": "/static/images/our-team/mentors/mojtaba-fadaei.webp",
+          "position": "کارآفرین | توسعه‌دهنده کسب‌وکار | مشاور مدیریت",
+          "name": "دکتر مجتبی فدایی",
+          "linkedIn": "https://www.linkedin.com/in/mojtabafadaei",
+          "text": "mentor",
+          "slug": "mojtaba-fadaei",
+          "first_name": "مجتبی",
+          "last_name": "فدایی",
+          "websites": [
+            "https://www.mojtabafadaei.com"
+          ],
+          "instagram": "",
+          "email": "",
+          "linkedin": "https://www.linkedin.com/in/mojtabafadaei",
+          "whatsapp": "",
+          "thumbnail": "/static/images/our-team/mentors/mojtaba-fadaei.webp",
+          "contactLinks": [
+            {
+              "type": "linkedin",
+              "value": "https://www.linkedin.com/in/mojtabafadaei",
+              "label": "LinkedIn"
+            },
+            {
+              "type": "website",
+              "value": "https://www.mojtabafadaei.com",
+              "label": "Personal website"
+            }
+          ],
+          "job_title": "بنیان‌گذار و رئیس هیئت‌مدیره هلدینگ BARĀMAD؛ بنیان‌گذار و مدیرعامل ASIAHITECH",
+          "location": "اصفهان، ایران",
+          "skills": [
+            "توسعه کسب‌وکار",
+            "مشاوره صنعتی",
+            "توسعه فناوری",
+            "مدیریت استراتژیک",
+            "بازاریابی و تحقیقات بازار"
+          ],
+          "interests": [
+            "کارآفرینی",
+            "نوآوری صنعتی",
+            "انتقال فناوری",
+            "استراتژی کسب‌وکار",
+            "زیست‌بوم نوآوری"
+          ],
+          "education": "دکتری مدیریت کسب‌وکار (تخصص: مدیریت بازرگانی)",
+          "about": [
+            "دکتر مجتبی فدایی دارای مدرک دکتری مدیریت کسب‌وکار با تخصص مدیریت بازرگانی است و بیش از ۱۶ سال سابقه مدیریتی در شرکت‌های صنعتی و فناورمحور دارد. او بنیان‌گذار و رئیس هیئت‌مدیره هلدینگ BARĀMAD و بنیان‌گذار و مدیرعامل ASIAHITECH است.",
+            "حوزه‌های حرفه‌ای فعالیت او شامل کارآفرینی، توسعه کسب‌وکار، مشاوره مدیریت، نوآوری صنعتی، توسعه فناوری، بازاریابی و تحقیقات بازار است.",
+            "سوابق حرفه‌ای، مجوزها و عضویت‌ها (بر اساس اطلاعات ارائه‌شده توسط دکتر فدایی در تاریخ ۸ نوامبر ۲۰۲۶):",
+            "• انجام موفق بیش از ۵۴۰ پروژه مشاوره صنعتی در حوزه‌های توسعه فناوری، عارضه‌یابی کسب‌وکار، بازاریابی و تحقیقات بازار.",
+            "• مشاور و ارزیاب رسمی توسعه کسب‌وکار و فناوری برای سازمان صنایع کوچک و شهرک‌های صنعتی ایران.",
+            "• مشاور شهرک علمی و تحقیقاتی اصفهان، شورای نوآوری فناوری نانو ایران و شبکه ملی بازار فناوری ایران (TechMart).",
+            "• دارنده مجوز مشاوره کسب‌وکار از وزارت صنعت، معدن و تجارت ایران.",
+            "• عضو مجمع جهانی اقتصاد (WEF).",
+            "• عضو پیوسته انجمن مدیریت استراتژیک ایران.",
+            "• عضو پیوسته انجمن مدیریت فناوری ایران.",
+            "• عضو پیوسته انجمن بازاریابی ایران.",
+            "• عضو اتاق بازرگانی، صنایع، معادن و کشاورزی ایران."
+          ]
+        }
+      ]
+    },
+    "Trainees": {
+      "title": "Trainees",
+      "people": [
+        {
+          "image": "/static/images/our-team/personnel/rasoul-moradimehr.png",
+          "position": "Founder & Chairman",
+          "name": "Rasoul Moradimehr",
+          "linkedIn": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "text": "managers",
+          "slug": "rasoul-moradimehr",
+          "first_name": "Rasoul",
+          "last_name": "Moradimehr",
+          "websites": [],
+          "job_title": "Founder & Chairman",
+          "instagram": "https://instagram.com/dr.moradimehr.rasoul",
+          "email": "Rasoul@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "whatsapp": "https://wa.me/17789865432",
+          "thumbnail": "/static/images/our-team/personnel/rasoul-moradimehr.png",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Business Development",
+            "Startup Mentorship",
+            "Venture Capital",
+            "Strategic Planning"
+          ],
+          "interests": [
+            "Mentoring",
+            "Entrepreneurship",
+            "Investment",
+            "Teamwork",
+            "Startup"
+          ],
+          "education": "PHD",
+          "about": [
+            "Dr. Moradimehr is an experienced entrepreneur and investor with more than a decade of expertise in business development, investment, and startup leadership. He began his professional journey in Iran, where he founded and managed several successful ventures that provided him with valuable knowledge in entrepreneurship and innovation. Among his most notable initiatives are the founding and management of Landa Investment Holding, the creation of the Landa Business Academy to empower young talents, and the establishment and leadership of the Forough Knowledge-Based Accelerator.",
+            "In addition, Rasoul served as Chairman of the Board of Farazman, where he played a key role in building strong connections between academia and industry, and forged partnerships with international universities and educational institutions. He was also the pioneer of the “Education Through Travel” model in Iran, an innovative approach that combined learning with real-world experiences and exploration.",
+            "Throughout his career, Rasoul Moradimehr has collaborated with numerous successful international startups, gaining invaluable experience in scaling ventures globally.",
+            "After moving to Canada, he launched Novanest Venture, a firm dedicated to supporting startups and international entrepreneurs through investment, acceleration, and advisory services.",
+            "Under his leadership, Novanest Venture focuses on:",
+            "• Investing in and accelerating early-stage and growth-stage startups",
+            "• Delivering specialized services within the Canada Start-up Visa Program",
+            "• Advising and supporting international entrepreneurs entering the Canadian market",
+            "• Designing and implementing provincial entrepreneurship programs",
+            "• Establishing the Novanest Business Academy to inspire and empower teenagers in entrepreneurship",
+            "Rasoul Moradi Mehr strongly believes that combining his past experiences with new opportunities in Canada can create a powerful platform for innovation, economic growth, and building a brighter future for the next generation of entrepreneurs."
+          ]
+        }
+      ]
+    },
+    "Core Team": {
+      "title": "Core Team",
+      "people": [
+        {
+          "image": "/static/images/our-team/personnel/rasoul-moradimehr.png",
+          "position": "Founder & Chairman",
+          "name": "Rasoul Moradimehr",
+          "linkedIn": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "text": "managers",
+          "slug": "rasoul-moradimehr",
+          "first_name": "Rasoul",
+          "last_name": "Moradimehr",
+          "websites": [],
+          "job_title": "Founder & Chairman",
+          "instagram": "https://instagram.com/dr.moradimehr.rasoul",
+          "email": "Rasoul@novanestholding.com",
+          "linkedin": "https://www.linkedin.com/in/rasoul-moradi-mehr/",
+          "whatsapp": "https://wa.me/17789865432",
+          "thumbnail": "/static/images/our-team/personnel/rasoul-moradimehr.png",
+          "location": "Vancouver, Canada",
+          "skills": [
+            "Business Development",
+            "Startup Mentorship",
+            "Venture Capital",
+            "Strategic Planning"
+          ],
+          "interests": [
+            "Mentoring",
+            "Entrepreneurship",
+            "Investment",
+            "Teamwork",
+            "Startup"
+          ],
+          "education": "PHD",
+          "about": [
+            "Dr. Moradimehr is an experienced entrepreneur and investor with more than a decade of expertise in business development, investment, and startup leadership. He began his professional journey in Iran, where he founded and managed several successful ventures that provided him with valuable knowledge in entrepreneurship and innovation. Among his most notable initiatives are the founding and management of Landa Investment Holding, the creation of the Landa Business Academy to empower young talents, and the establishment and leadership of the Forough Knowledge-Based Accelerator.",
+            "In addition, Rasoul served as Chairman of the Board of Farazman, where he played a key role in building strong connections between academia and industry, and forged partnerships with international universities and educational institutions. He was also the pioneer of the “Education Through Travel” model in Iran, an innovative approach that combined learning with real-world experiences and exploration.",
+            "Throughout his career, Rasoul Moradimehr has collaborated with numerous successful international startups, gaining invaluable experience in scaling ventures globally.",
+            "After moving to Canada, he launched Novanest Venture, a firm dedicated to supporting startups and international entrepreneurs through investment, acceleration, and advisory services.",
+            "Under his leadership, Novanest Venture focuses on:",
+            "• Investing in and accelerating early-stage and growth-stage startups",
+            "• Delivering specialized services within the Canada Start-up Visa Program",
+            "• Advising and supporting international entrepreneurs entering the Canadian market",
+            "• Designing and implementing provincial entrepreneurship programs",
+            "• Establishing the Novanest Business Academy to inspire and empower teenagers in entrepreneurship",
+            "Rasoul Moradi Mehr strongly believes that combining his past experiences with new opportunities in Canada can create a powerful platform for innovation, economic growth, and building a brighter future for the next generation of entrepreneurs."
+          ]
+        }
+      ]
+    }
+  },
+  "profile": {
+    "Skills": "Skills",
+    "Interests": "Interests",
+    "NotSpecified": "Not Specified",
+    "Location": "Location",
+    "Education": "Education",
+    "Email": "Email",
+    "PreferredContact": "Preferred Contact",
+    "About": "About",
+    "fallback": {
+      "aboutme": "Hi, I'm {{name}}. {{jobText}} — passionate about building products, mentoring startups and collaborating across teams.",
+      "strengths": "My strengths include {{skills}}. I value continuous learning, collaboration, and delivering real impact.",
+      "strenghtsWithoutSkills": "I focus on learning, collaboration and creating measurable impact."
+    }
+  }
+}
